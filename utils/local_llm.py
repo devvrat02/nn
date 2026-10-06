@@ -19,15 +19,27 @@ def effective_context(requested, native):
     return requested
 
 
-def render_chat(tokenizer, messages, model_type):
+def render_chat(tokenizer, messages, model_type, prompt_style="chat"):
+    if prompt_style == "base-v1":
+        if [m["role"] for m in messages] != ["system", "user"]:
+            raise ValueError("base-v1 supports a system instruction and one user prompt only")
+        return (f"{tokenizer.bos_token or ''}{messages[0]['content']}\n\n"
+                f"### Task\n{messages[1]['content']}\n\n### Response\n")
     if tokenizer.chat_template:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     # Some Llama 2 tokenizer releases predate explicit Transformers chat templates.
     # This backend only needs a system instruction followed by a single user turn.
-    if model_type == "llama" and [m["role"] for m in messages] == ["system", "user"]:
+    if model_type == "llama" and tokenizer.bos_token == "<s>" and [m["role"] for m in messages] == ["system", "user"]:
         return (f"{tokenizer.bos_token}[INST] <<SYS>>\n{messages[0]['content'].strip()}\n<</SYS>>\n\n"
                 f"{messages[1]['content'].strip()} [/INST]")
     raise ValueError("No supported chat template for this model/messages.")
+
+
+def stop_token_ids(model, tokenizer):
+    configured = model.generation_config.eos_token_id
+    if configured is None:
+        configured = tokenizer.eos_token_id
+    return list(configured) if isinstance(configured, (list, tuple)) else [configured]
 
 
 class LocalLLM:
@@ -42,6 +54,7 @@ class LocalLLM:
         self.max_new_tokens = int(os.environ.get("TRACER_MAX_NEW_TOKENS", "1536"))
         self.context = int(os.environ.get("TRACER_CONTEXT", "16384"))
         self.tokenizer = AutoTokenizer.from_pretrained(self.path, local_files_only=True)
+        self.prompt_style = os.environ.get("TRACER_PROMPT_STYLE", "chat")
         config = AutoConfig.from_pretrained(self.path, local_files_only=True)
         self.context = effective_context(self.context, config.max_position_embeddings)
         placement = os.environ.get("TRACER_DEVICE_MAP", "cuda")
@@ -58,6 +71,8 @@ class LocalLLM:
                          for p in sorted(self.path.glob("*")) if p.is_file()]
         if placement != "cuda":
             self.identity.append(("placement", placement, "gpu10GiB-cpu32GiB"))
+        if self.prompt_style != "chat":
+            self.identity.append(("prompt_style", self.prompt_style))
         print(f"Local LLM: {self.path}; BF16; placement {placement}; context limit {self.context}", flush=True)
 
     def complete(self, messages):
@@ -76,19 +91,20 @@ class LocalLLM:
             return json.loads(cache_path.read_text(encoding="utf-8"))["text"]
         if (self.cache / f"{key}.truncated.json").exists():
             raise LocalGenerationLimitError("This exact greedy request previously exhausted its output allowance.")
-        text = render_chat(self.tokenizer, messages, self.model.config.model_type)
+        text = render_chat(self.tokenizer, messages, self.model.config.model_type, self.prompt_style)
         inputs = self.tokenizer(text, return_tensors="pt", add_special_tokens=False).to(self.model.device)
         length = inputs["input_ids"].shape[-1]
         if length + self.max_new_tokens > self.context:
             raise ValueError(f"Prompt has {length} tokens plus {self.max_new_tokens} output tokens, "
                              f"exceeding context {self.context}. No evidence was dropped. "
                              "Use a model with sufficient context or a separately documented shorter-prompt experiment.")
+        stops = stop_token_ids(self.model, self.tokenizer)
         with torch.inference_mode():
             output = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False,
                                          temperature=None, top_p=None, top_k=None,
-                                         pad_token_id=self.tokenizer.eos_token_id)
+                                         pad_token_id=self.tokenizer.eos_token_id, eos_token_id=stops)
         tokens = output[0, length:]
-        if len(tokens) >= self.max_new_tokens and tokens[-1].item() != self.tokenizer.eos_token_id:
+        if len(tokens) >= self.max_new_tokens and tokens[-1].item() not in stops:
             write_path = self.cache / f"{key}.truncated.json"
             write_path.write_text(json.dumps({"text": self.tokenizer.decode(tokens, skip_special_tokens=True),
                                               "input_tokens": length, "output_tokens": len(tokens),

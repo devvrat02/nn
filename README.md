@@ -5,6 +5,11 @@ models, train alignment, run Qwen verification/reassessment, and compare measure
 results with the paper. No paid API is required for this workflow.
 Section 11 adds local CoT and CoT + TRACER and produces a combined four-method report.
 
+**Llama 3.1 8B on REPACSS:** follow [RUN_LLAMA31.md](RUN_LLAMA31.md). Separate base
+and Instruct profiles use a 16,384-token context budget on one H100. The base model
+you have access to is supported as an experimental completion model; Instruct is
+recommended when available for TRACER's structured answers.
+
 **Llama 2 7B Chat on REPACSS:** see [RUN_LLAMA2.md](RUN_LLAMA2.md) for Linux setup,
 model access, the `--model-profile llama2-7b` switch, and Slurm benchmark commands.
 The supplied job script loads BF16 weights fully on one H100 GPU. Its native
