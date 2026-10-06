@@ -1,5 +1,8 @@
 # Run TRACER locally, one step at a time
 
+For **Llama 2 7B Chat** instead of Qwen, use [RUN_LLAMA2.md](RUN_LLAMA2.md).
+Its context/output settings differ; do not reuse Qwen token limits or output folders.
+
 This is the manual for a **fully local Qwen adaptation** of the paper. No OpenAI
 API key, hosted inference, or paid API calls are used. Internet is needed once to
 download public model files. Every execution command after downloading runs offline.

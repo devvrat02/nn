@@ -5,6 +5,12 @@ models, train alignment, run Qwen verification/reassessment, and compare measure
 results with the paper. No paid API is required for this workflow.
 Section 11 adds local CoT and CoT + TRACER and produces a combined four-method report.
 
+**Llama 2 7B Chat on REPACSS:** see [RUN_LLAMA2.md](RUN_LLAMA2.md) for Linux setup,
+model access, the `--model-profile llama2-7b` switch, and Slurm benchmark commands.
+The supplied job script loads BF16 weights fully on one H100 GPU. Its native
+4,096-token context requires preflight checks; long prompts may prevent an
+unchanged full benchmark. Qwen remains the default for existing commands.
+
 Alternative API-backed setup and smoke checks: [RUNNING.md](RUNNING.md).
 Paper walkthrough and implementation details: [PAPER_EXPLAINED.md](PAPER_EXPLAINED.md).
 On this Windows machine, run `./run_local.cmd --mode smoke` for an offline integration test
