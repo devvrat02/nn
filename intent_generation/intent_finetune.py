@@ -10,9 +10,9 @@ def finetune_gpt_mini(datapath, result_folder):
     
     task_description = """This task is to generate the finetune data for intent generation."""
 
-    result_handler = DataHandler(task_description, result_folder)
+    result_handler = DataHandler(task_description, result_folder, exact_folder=True)
 
-    with open(datapath, 'r') as f:
+    with open(datapath, 'r', encoding='utf-8') as f:
         data = json.load(f)
     for event in data:
         evidence = []
@@ -52,7 +52,7 @@ def finetune_gpt_mini(datapath, result_folder):
         }
         messages.append(message)
     
-    with open(f'{result_handler.folder_path}/finetune_data.jsonl', 'w') as f:
+    with open(f'{result_handler.folder_path}/finetune_data.jsonl', 'w', encoding='utf-8') as f:
         for message in messages:
             json.dump(message, f)
             f.write('\n')
@@ -60,4 +60,10 @@ def finetune_gpt_mini(datapath, result_folder):
     result_handler.close()
 
 
-finetune_gpt_mini("dataset/train.json", "intent_generation/finetune_data/")
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Prepare local intent training data; no API calls.")
+    parser.add_argument("--datapath", default="dataset/train.json")
+    parser.add_argument("--output_dir", default="intent_generation/finetune_data")
+    args = parser.parse_args()
+    finetune_gpt_mini(args.datapath, args.output_dir)

@@ -8,6 +8,7 @@ import re
 import argparse
 from tqdm import tqdm
 from utils.utils import *
+from utils.local_llm import LocalGenerationLimitError
 
 
 prompt = ['''You are required to determine the veracity of a claim.
@@ -110,11 +111,19 @@ Claim: ''', '''A fact checker will''',
 
 
 def extract_answer(text):
-    matches = re.findall(r'<\s*(.*?)\s*>', text)
-    ans = matches[-1]
-    return ans
+    # Models occasionally append an empty <> after the actual verdict. It is
+    # formatting noise, not a replacement verdict. Still reject an explicit
+    # unsupported final value rather than using an earlier, possibly revised one.
+    matches = [value.strip().lower() for value in re.findall(r'<([^<>]*)>', text)
+               if value.strip()]
+    if not matches:
+        raise ValueError("No nonempty <true>, <half-true>, or <false> verdict found")
+    answer = matches[-1]
+    if answer not in {"true", "half-true", "false"}:
+        raise ValueError(f"Unsupported final verdict {answer!r}; expected true, half-true, or false")
+    return answer
 
-def promptf(question, prompt, evidence,
+def promptf(question, prompt, evidence, model="gpt-3.5-turbo", audit=None,
             intermediate="\nAnswer:",
             followup="Intermediate Question",
             finalans='\nBased on the answers to these questions, it is clear that among among false, half-true, true, the claim '):
@@ -127,23 +136,37 @@ def promptf(question, prompt, evidence,
     attempts = 0
     rationale, pred = None, None
 
-    labels_set = ["true", "half-true", "false"]
+    last_error = None
+    recovered = False
     
     while attempts < max_retries:
         try:
-            ret_text = call_gpt(cur_prompt, stop='Answer me ‘yes’ or ‘no’: No.', model="gpt-3.5-turbo")
+            ret_text = call_gpt(cur_prompt, model=model)
             rationale = ret_text
             pred = extract_answer(ret_text)
-            if pred is not None:
-                assert pred.lower() in labels_set
-                break
+            break
+        except LocalGenerationLimitError:
+            if recovered:
+                raise
+            # Keep the original claim/evidence. Do not recycle an unfinished,
+            # possibly repetitive rationale or invent a label on failure.
+            recovered = True
+            if audit is not None:
+                audit["generation_recovery"] = "bounded-hiss-v1"
+            print("Output limit reached; retrying once with bounded HiSS instructions.", flush=True)
+            cur_prompt += ("\n\nFor this answer, use at most three verification questions and at most 200 words total. "
+                           "Use only the supplied evidence. Do not repeat questions or lists. "
+                           "Do not invent quotations. Finish now with one final verdict: <true>, <half-true>, or <false>.")
         except Exception as e:
-            print(f"Attempt {attempts + 1} failed: {e}")
+            last_error = e
+            print(f"Attempt {attempts + 1} failed: {type(e).__name__}: {e}")
             rationale = ""
             pred = ""
         
         attempts += 1
     
+    if not pred:
+        raise RuntimeError(f"Claim verification failed after three attempts: {last_error}") from last_error
     return rationale, pred.lower()
 
 
@@ -153,12 +176,14 @@ def extract_question(generated):
 
 def main(args):
     dataset_path = args.datapath
-    with open(dataset_path, 'r') as json_file:
+    with open(dataset_path, 'r', encoding='utf-8') as json_file:
         json_list = json.load(json_file)
 
-    logger = DataHandler(task_description="Claim Verification HiSS", result_folder="method/result/")
+    logger = DataHandler(task_description="Claim Verification HiSS", result_folder=args.output_dir, exact_folder=True, resume=getattr(args, "resume", False))
 
     for json_str in tqdm(json_list):
+        if json_str["example_id"] in logger.completed_ids:
+            continue
         result = json_str
         label = result["veracity"]
         claim = result["claim"]
@@ -167,10 +192,12 @@ def main(args):
         ruling = result["ruling"]
 
         question = claim 
+        audit = {}
         rationale, pred = promptf(question, 
                                   prompt, 
-                                  evidence=evidence)
+                                  evidence=evidence, model=args.model, audit=audit)
         logger.log_iteration({
+            **audit,
             "example_id": idx,
             "veracity": label,
             "pred": pred,
@@ -185,5 +212,7 @@ def main(args):
 if __name__ == '__main__':
    parser = argparse.ArgumentParser()
    parser.add_argument("--datapath", type=str, default="dataset/test.json")
+   parser.add_argument("--output_dir", default="method/results/literal")
+   parser.add_argument("--model", default="gpt-3.5-turbo")
    args = parser.parse_args()
    main(args)

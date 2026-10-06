@@ -1,8 +1,10 @@
-export CUDA_VISIBLE_DEVICES=3
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
 
 python sentence_alignment/train_model_script.py --max_evi 8 --train_epoch 5
 
-MODEL_DIR="sentence_alignment/results-model/checkpoint-7500/"
+MODEL_DIR="sentence_alignment/results-model"
 TEST_DATA="dataset/test.json"
 OUTPUT_FILE="test_alignment.json"
 MAX_EVIDENCE_COUNT=4

@@ -6,18 +6,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def call_gpt(cur_prompt, stop=None, model="gpt-4o-mini"):
-    reasoner_messages = [
-        {
-            "role": "user",
-            "content": cur_prompt
-        },
-    ]
-    completion = openai.chat.completions.create(
-        model=model,
-        messages=reasoner_messages,
-    )
-    returned = completion.choices[0].message.content
-    return returned
+    from utils.utils import call_gpt as dispatch
+    return dispatch(cur_prompt, stop=stop, model=model)
 
 
 PROMPT_IMPLICIT_QUESTION = """
@@ -201,8 +191,8 @@ Questions:
 
 class QwenModelWrapper:
     def __init__(self):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
         model_name = "Qwen/Qwen2.5-3B-Instruct"
-        model_name = "Qwen/Qwen2.5-7B-Instruct"
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype="auto",
@@ -244,18 +234,8 @@ class GPT4oMiniWrapper:
         self.model_name = model_name
     
     def call_gpt(self, cur_prompt, stop=None):
-        reasoner_messages = [
-            {
-                "role": "user",
-                "content": cur_prompt
-            },
-        ]
-        completion = openai.chat.completions.create(
-            model=self.model_name,
-            messages=reasoner_messages,
-        )
-        returned = completion.choices[0].message.content
-        return returned
+        from utils.utils import call_gpt
+        return call_gpt(cur_prompt, model=self.model_name)
 
     def __call__(self, *args, **kwds):
         return self.call_gpt(*args, **kwds)

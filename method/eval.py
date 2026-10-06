@@ -33,6 +33,8 @@ def precision_recall_f1(y_true, y_pred, label):
 
 
 def accuracy(y_true, y_pred):
+    if not y_true or len(y_true) != len(y_pred):
+        raise ValueError("Expected equal, nonempty label lists")
     correct = sum(1 for true, pred in zip(y_true, y_pred) if true == pred)
     return correct / len(y_true)
 
@@ -45,30 +47,41 @@ def macro_f1(y_true, y_pred, labels):
     return sum(f1_scores) / len(labels)
 
 
-def main():
-    datapath = "method/result/20250413_000157/log.jsonl"
+def evaluate(datapath):
     labels_set = ["false", "half-true", "true"]
 
     y_true = []
     y_pred = []
 
-    with open(datapath, 'r') as fread:
+    with open(datapath, 'r', encoding='utf-8') as fread:
         for line in fread:
             data = json.loads(line)
+            if data['pred'] not in labels_set or data['veracity'] not in labels_set:
+                raise ValueError("Invalid prediction or reference label")
             y_pred.append(data['pred'])
             y_true.append(data['veracity'])
 
     acc = accuracy(y_true, y_pred)
     macro_f1_score = macro_f1(y_true, y_pred, labels_set)
     half_true_precision, half_true_recall, half_true_f1 = precision_recall_f1(y_true, y_pred, "half-true")
+    return {"count": len(y_true), "accuracy": acc, "macro_f1": macro_f1_score,
+            "half_true_precision": half_true_precision, "half_true_recall": half_true_recall,
+            "half_true_f1": half_true_f1}
 
-    print(f"Accuracy: {acc:.4f}")
-    print(f"Macro-F1: {macro_f1_score:.4f}")
-    print(f"Half-true Precision: {half_true_precision:.4f}")
-    print(f"Half-true Recall: {half_true_recall:.4f}")
-    print(f"Half-true F1: {half_true_f1:.4f}")
+def main():
+    import argparse
+    from pathlib import Path
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--datapath", required=True)
+    parser.add_argument("--output")
+    args = parser.parse_args()
+    metrics = evaluate(args.datapath)
+    print(json.dumps(metrics, indent=2))
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
     main()
-    
+

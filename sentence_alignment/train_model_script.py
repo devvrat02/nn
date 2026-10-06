@@ -7,7 +7,10 @@ import random
 import logging
 from typing import List, Dict
 import argparse
-from model import Aligner, AlignerConfig
+try:
+    from .model import Aligner, AlignerConfig
+except ImportError:
+    from model import Aligner, AlignerConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,7 +25,7 @@ random.seed(42)
 
 class AlignmentDataset(Dataset):
     def __init__(self, file_path: str, tokenizer, max_length=512, max_evidence_count=4):
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             self.data = json.load(f)
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -65,8 +68,9 @@ class AlignmentDataset(Dataset):
         special_token_positions = special_token_positions[:self.max_evidence_count]
         special_token_positions_padded = special_token_positions + [0] * (self.max_evidence_count - len(special_token_positions))
         
-        labels_padded = list(labels) + [-1] * (self.max_evidence_count - len(labels))
-        labels_mask = [1] * len(labels) + [0] * (self.max_evidence_count - len(labels))
+        visible_count = min(len(labels), len(special_token_positions))
+        labels_padded = list(labels[:visible_count]) + [0] * (self.max_evidence_count - visible_count)
+        labels_mask = [1] * visible_count + [0] * (self.max_evidence_count - visible_count)
         
         return {
             "input_ids": encoding['input_ids'].squeeze(0),
@@ -105,22 +109,27 @@ class AlignmentDataCollator:
 
 def main(args):
     train_dataset_path = args.train_dataset
-    tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-large")
+    tokenizer = AutoTokenizer.from_pretrained(args.encoder_name)
     train_dataset = AlignmentDataset(file_path=train_dataset_path, tokenizer=tokenizer, max_evidence_count=args.max_evi)
     data_collator = AlignmentDataCollator()
 
-    config = AlignerConfig(dropout=0.2)
+    config = AlignerConfig(dropout=0.2, encoder_name=args.encoder_name)
     model = Aligner(config, tokenizer)
 
     training_args = TrainingArguments(
-        output_dir=f"./sentence_alignment/results-model/",
+        output_dir=args.output_dir,
         num_train_epochs=args.train_epoch,
-        per_device_train_batch_size=8,
+        per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        gradient_checkpointing=args.gradient_checkpointing,
         logging_dir='./sentence_alignment/logs-model',
         logging_steps=100,
         save_strategy='epoch',
-        learning_rate=2e-5,
+        learning_rate=args.learning_rate,
         save_total_limit=3,
+        report_to="none",
+        max_steps=args.max_steps,
+        bf16=getattr(args, "bf16", False),
     )
 
     trainer = Trainer(
@@ -129,15 +138,29 @@ def main(args):
         train_dataset=train_dataset,
         data_collator=data_collator
     )
-    try:
-        trainer.train()
-    except RuntimeError as e:
-        print(f"RuntimeError during training: {e}")
+    if args.gradient_checkpointing:
+        model.sentence_encoder.gradient_checkpointing_enable()
+        # Enable on the encoder directly; the custom outer model has no hook.
+        trainer.args.gradient_checkpointing = False
+    trainer.train(resume_from_checkpoint=getattr(args, "resume_from_checkpoint", None))
+    trainer.save_model(args.output_dir)
+    tokenizer.save_pretrained(args.output_dir)
+    from pathlib import Path
+    Path(args.output_dir, "training_run.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Training script")
     parser.add_argument("--train_dataset", type=str, default="dataset/train.json")
     parser.add_argument("--max_evi", type=int, default=8)
     parser.add_argument("--train_epoch", type=int, default=5)
+    parser.add_argument("--encoder_name", default="FacebookAI/roberta-large")
+    parser.add_argument("--output_dir", default="sentence_alignment/results-model")
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--gradient_checkpointing", action="store_true")
+    parser.add_argument("--learning_rate", type=float, default=1e-5)
+    parser.add_argument("--max_steps", type=int, default=-1)
+    parser.add_argument("--bf16", action="store_true")
+    parser.add_argument("--resume_from_checkpoint")
     args = parser.parse_args()
     main(args)

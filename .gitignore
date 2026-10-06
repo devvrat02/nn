@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+outputs/
+sentence_alignment/results-model/
+sentence_alignment/logs-model/
+intent_generation/finetune_data/
+method/results/
+.cache/
+models/

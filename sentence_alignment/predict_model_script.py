@@ -7,7 +7,10 @@ import json
 import logging
 from typing import List, Dict
 import argparse
-from model import Aligner, AlignerConfig
+try:
+    from .model import Aligner, AlignerConfig
+except ImportError:
+    from model import Aligner, AlignerConfig
 from safetensors.torch import load_file
 from tqdm import tqdm
 from sklearn.metrics import classification_report, confusion_matrix
@@ -37,6 +40,9 @@ def predict_single_claim(model, tokenizer, claim, evidence_list, max_evidence_co
         List of predictions, matching the length of evidence_list.
     """
     special_token = "[SPLIT]"
+    if max_evidence_count < 1:
+        raise ValueError("max_evidence_count must be positive")
+    device = next(model.parameters()).device
     predictions = [0] * len(evidence_list)  # Default all labels to 0
     
     # Process evidence in groups of max_evidence_count
@@ -61,6 +67,17 @@ def predict_single_claim(model, tokenizer, claim, evidence_list, max_evidence_co
         
         # Ensure special token positions do not exceed evidence count
         special_token_positions = special_token_positions[:len(chunk_evidence)]
+        if len(special_token_positions) < len(chunk_evidence):
+            # Never classify a truncated sentence using a padding/CLS embedding.
+            if len(chunk_evidence) > 1:
+                predictions[i:i+len(chunk_evidence)] = predict_single_claim(
+                    model, tokenizer, claim, chunk_evidence, 1, max_length)
+                continue
+            shortened_claim = tokenizer.decode(tokenizer.encode(claim, add_special_tokens=False)[:max_length // 2])
+            if shortened_claim == claim:
+                raise ValueError("Cannot fit an evidence separator in the token window")
+            predictions[i] = predict_single_claim(model, tokenizer, shortened_claim, chunk_evidence, 1, max_length)[0]
+            continue
         special_token_positions_padded = special_token_positions + [0] * (max_evidence_count - len(special_token_positions))
         
         # Convert to tensor and move to device
@@ -119,22 +136,24 @@ def find_model_file(model_dir):
     raise FileNotFoundError(f"No model file found in {model_dir}")
 
 def predict(model_dir, test_data_path, output_path, max_evidence_count=4, do_eval=False):
-    tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-large")
+    model_file, _ = find_model_file(model_dir)
+    model_dir = os.path.dirname(os.path.abspath(model_file))
+    tokenizer_path = model_dir if os.path.exists(os.path.join(model_dir, "tokenizer_config.json")) else "FacebookAI/roberta-large"
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     special_token = "[SPLIT]"
     if special_token not in tokenizer.get_vocab():
         tokenizer.add_tokens([special_token])
     
-    config = AlignerConfig.from_pretrained(model_dir, trust_remote_code=True)
+    config = AlignerConfig.from_pretrained(model_dir)
     model = Aligner.from_pretrained(
         model_dir,
         config=config,
         tokenizer=tokenizer,
-        trust_remote_code=True
     )
     model = model.to(device)
     model.eval()
     
-    with open(test_data_path, 'r') as f:
+    with open(test_data_path, 'r', encoding='utf-8') as f:
         test_data = json.load(f)
     
     final_results = []
@@ -160,11 +179,12 @@ def predict(model_dir, test_data_path, output_path, max_evidence_count=4, do_eva
             eval_true.extend(item['annotation'])
         final_results.extend([result_item])
     
-    with open(output_path, 'w') as f:
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(final_results, f, indent=2)
     
     if do_eval:
-        reports = classification_report(eval_true, eval_pred)
+        reports = classification_report(eval_true, eval_pred, zero_division=0)
         matrix = confusion_matrix(eval_true, eval_pred)
         print(reports)
         print(matrix)

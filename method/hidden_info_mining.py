@@ -10,6 +10,8 @@ import random
 import time
 from method.prompts import *
 from intent_generation.prompts import *
+from utils.generation_recovery import generate_structured, parse_choice, StructuredGenerationError
+from utils.local_llm import LocalGenerationLimitError
 
 
 question_num = 4
@@ -32,8 +34,9 @@ class IntentArgumentation:
         self.intent_model = intent_model_id
         self.question_generator = model_mapping.get(question_model, GPT4oMiniWrapper)()
         self.assumption_generator = model_mapping.get(assumption_model, GPT4oMiniWrapper)()
-        self.relevance_ranker = SentenceTransformer('all-MiniLM-L6-v2')
-        self.nli_reranker = CrossEncoder('cross-encoder/nli-deberta-v3-large')
+        ranker_device = os.environ.get("TRACER_RANKER_DEVICE")
+        self.relevance_ranker = SentenceTransformer(os.environ.get("TRACER_RANKER_MODEL", 'all-MiniLM-L6-v2'), device=ranker_device)
+        self.nli_reranker = CrossEncoder(os.environ.get("TRACER_NLI_MODEL", 'cross-encoder/nli-deberta-v3-large'), device=ranker_device, max_length=512)
         self.classifier = model_mapping.get(classifier_model, GPT4oMiniWrapper)()
         print("Ranker device:", self.relevance_ranker.device)
         print("Reranker device:", self.nli_reranker.model.device)
@@ -41,11 +44,11 @@ class IntentArgumentation:
 
     def _generate_intent(self, event):
         claim = event['claim']
-        evidence = event['evidence']
-        evidence = [evi for evi, label in zip(event["evidence"], event["annotation"]) if label != 0]
-        evidence = '\n'.join(event['evidence'])
+        evidence = '\n'.join(evi for evi, label in zip(event["evidence"], event["prediction"]) if label == 1)
 
         inputs = FINETUNE_TEMPLATE_TASK.replace("{claim}", claim).replace("{evidence}", evidence)
+        if os.environ.get("TRACER_BACKEND") == "local":
+            inputs += "\nOutput one implicit intended conclusion inside angle brackets: <intended conclusion>."
         messages = [
             {
                 "role": "system",
@@ -57,19 +60,11 @@ class IntentArgumentation:
             },
         ]
 
-        max_retries = 3
-        retries = 0
-        while retries < max_retries:
-            try:
-                response = completion_finetune(self.intent_model, messages)
-                intent = self._extract_content(response)
-                break
-            except Exception as e:
-                print(e)
-                retries += 1
-                intent = ""
-        
-        return intent
+        def generate(text):
+            return completion_finetune(self.intent_model, [messages[0], {"role": "user", "content": text}])
+        return generate_structured(generate, inputs, self._extract_content, "intent",
+                                   "Output just one short sentence inside <...>, under 60 words. No explanation.",
+                                   event.setdefault("generation_recoveries", []))
 
     def _extract_content(self, input_string):
         patterns = [
@@ -83,16 +78,24 @@ class IntentArgumentation:
 
         pattern = re.compile(r"<([^>]+)>")
         matches = pattern.findall(input_string)
-        return matches[0]
+        if not matches or not matches[0].strip():
+            raise ValueError("Missing nonempty <intent>")
+        return matches[0].strip()
     def _extract_answer(self, input_string):
         # Use regex to find all matches between angle brackets and trim extra whitespace
         matches = re.findall(r'<\s*(.*?)\s*>', input_string)
-        text = matches[0].split("||")
+        if not matches or not matches[0].strip():
+            raise ValueError("Missing nonempty <assumption||assumption> block")
+        text = [value.strip() for value in matches[0].split("||")]
+        if any(not value for value in text) or len(text) > assumption_num:
+            raise ValueError("Expected one to five nonempty assumptions")
         return text
 
     def _extract_question(self, input_string):
         # Use regex to find all matches between angle brackets and trim extra whitespace
         matches = re.findall(r'<\s*(.*?)\s*>', input_string)
+        if not matches or any(not value.strip() for value in matches) or len(matches) > question_num:
+            raise ValueError("Expected one to four nonempty bracketed questions")
         return matches
 
     def implicit_assumption(self, event):
@@ -107,9 +110,11 @@ class IntentArgumentation:
         global assumption_num
         prompt = PROMPT_IMPLICIT_ASSUMPTION.format(claim=claim, intention=intent, questions=implicit_question_string,
                                                    assumption_max_number=assumption_num)
-        response = self.assumption_generator(prompt)
-        assumptions = self._extract_answer(response)
-        return assumptions
+        return generate_structured(self.assumption_generator, prompt, self._extract_answer, "assumptions",
+                                   "Output one to five distinct short assumptions in a SINGLE bracketed block: "
+                                   "<first assumption||second assumption>. At most 120 words total. "
+                                   "No rationale, empty brackets, repeated assumptions, or text outside the block.",
+                                   event.setdefault("generation_recoveries", []))
     
     def implicit_question(self, event):
         global question_num
@@ -118,14 +123,15 @@ class IntentArgumentation:
         intent = event['intent']
 
         prompt = PROMPT_IMPLICIT_QUESTION_HYPER.format(claim=claim, intent=intent, evidence=evidence, question_num=question_num)
-        response = self.question_generator(prompt)
-        questions = self._extract_question(response)
-        return questions
+        return generate_structured(self.question_generator, prompt, self._extract_question, "questions",
+                                   "Output one to four short yes/no questions, each inside its own <...>. "
+                                   "At most 100 words total. No explanation or repetition.",
+                                   event.setdefault("generation_recoveries", []))
     
     def _cross_encoder_pipeline(self, premises, hypotheses):
         inputs = [(premise, hypotheses) for premise in premises]
         label_mapping = ['contradiction', 'entailment', 'neutral']
-        scores = self.nli_reranker.predict(inputs)
+        scores = self.nli_reranker.predict(inputs, batch_size=4, show_progress_bar=False)
         labels = [label_mapping[score_max] for score_max in scores.argmax(axis=1)]
         softmax_scores = softmax(scores, axis=1)
 
@@ -135,6 +141,8 @@ class IntentArgumentation:
         return labels, final_scores
     
     def ranking_top_k_evidence(self, assumption, sentences_key, relevant_evidence_dict, type, k=3):
+        if not sentences_key:
+            return []
         assumption_embedding = self.relevance_ranker.encode(assumption)
         evidence_similarities = []
         for key in sentences_key:
@@ -217,7 +225,9 @@ class IntentArgumentation:
             query = f"Evaluate △P(Z|do({letter}=¬{letter})). More specifically, how does the probability " \
             f"of Z change when we set {letter} from {letter} to ¬{letter}?"
             prompt = PROMPT_CAUSAL_EVAL.format(argument=json.dumps(argument, indent=4), query=query)
-            ans = call_gpt(prompt)
+            ans = generate_structured(call_gpt, prompt, lambda text: parse_choice(text, "ABC"), "counterfactual",
+                                      "Output exactly one letter: A, B, or C. No explanation.",
+                                      event.setdefault("generation_recoveries", []))
             if ans == "B" or ans == "C":
                 valid_assumption.append(assume)
         event["assumption"] = valid_assumption
@@ -238,8 +248,12 @@ class IntentArgumentation:
                 argument = self.hidden_info_mining(event)
                 event["argument"] = argument
                 break
+            except (StructuredGenerationError, LocalGenerationLimitError):
+                raise
             except Exception as e:
                 print(e)
                 retries += 1
                 time.sleep(1)
+        if "argument" not in event:
+            raise RuntimeError(f"Hidden evidence mining failed for {event.get('example_id')} after three attempts.")
         return event
