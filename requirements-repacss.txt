@@ -1,4 +1,4 @@
-# Linux/Python 3.11 environment. Install CUDA PyTorch separately (RUN_LLAMA2.md).
+# Linux/Python 3.11 environment. Install CUDA PyTorch separately (RUN_LLAMA3.md).
 # Freeze the resolved environment before running benchmarks.
 transformers==4.57.6
 sentence-transformers==3.4.1

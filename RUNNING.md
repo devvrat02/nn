@@ -1,6 +1,7 @@
 # Running the repaired TRACER repository
 
-For the new fully local Qwen workflow and step-by-step paper comparison, use
+For the current Meta-Llama-3-8B workflow on REPACSS, use
+[RUN_LLAMA3.md](RUN_LLAMA3.md). Earlier Windows/Qwen instructions are in
 [RUN_LOCAL.md](RUN_LOCAL.md). The API-backed workflow below is retained as an alternative.
 
 The local environment is `../.venv`. It uses Python 3.14 and inherits the machine's

@@ -1,5 +1,7 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
+import local_workflow as workflow
 
 from local_workflow import apply_model_profile
 from utils.local_llm import effective_context, render_chat, stop_token_ids
@@ -9,9 +11,7 @@ class LlamaProfileTests(unittest.TestCase):
     def test_profiles_keep_qwen_defaults_and_bound_llama_context(self):
         for profile, folder, context, tokens, device in (
             ("qwen", "qwen", 16384, 1536, "cuda"),
-            ("llama2-7b", "llama2-7b-chat", 4096, 512, "cuda"),
-            ("llama31-8b", "llama31-8b", 16384, 1536, "cuda"),
-            ("llama31-8b-instruct", "llama31-8b-instruct", 16384, 1536, "cuda"),
+            ("llama3-8b", "llama3-8b", 8192, 1536, "cuda"),
         ):
             args = SimpleNamespace(model_profile=profile, llm=None, context=None,
                                    max_new_tokens=None, device_map=None)
@@ -20,25 +20,25 @@ class LlamaProfileTests(unittest.TestCase):
                              (folder, context, tokens, device))
 
     def test_user_overrides_are_preserved(self):
-        args = SimpleNamespace(model_profile="llama2-7b", llm="custom", context=3000,
+        args = SimpleNamespace(model_profile="llama3-8b", llm="custom", context=3000,
                                max_new_tokens=256, device_map="cuda")
         apply_model_profile(args)
         self.assertEqual((args.llm, args.context, args.max_new_tokens, args.device_map),
                          ("custom", 3000, 256, "cuda"))
 
     def test_cannot_fake_longer_context(self):
-        self.assertEqual(effective_context(4096, 4096), 4096)
+        self.assertEqual(effective_context(8192, 8192), 8192)
         with self.assertRaisesRegex(ValueError, "native limit"):
-            effective_context(16384, 4096)
+            effective_context(16384, 8192)
 
-    def test_llama_fallback_includes_entire_evidence_and_system(self):
-        tokenizer = SimpleNamespace(chat_template=None, bos_token="<s>")
-        messages = [{"role": "system", "content": "Format rule"},
-                    {"role": "user", "content": "Claim and all evidence"}]
-        self.assertEqual(render_chat(tokenizer, messages, "llama"),
-                         "<s>[INST] <<SYS>>\nFormat rule\n<</SYS>>\n\nClaim and all evidence [/INST]")
-        with self.assertRaises(ValueError):
-            render_chat(tokenizer, messages, "unknown")
+    def test_default_cli_selects_exact_requested_base_model(self):
+        with patch("sys.argv", ["local_workflow.py", "doctor"]), \
+             patch.object(workflow, "configure"), patch.object(workflow, "doctor") as doctor:
+            workflow.main()
+        args = doctor.call_args.args[0]
+        self.assertEqual(args.model_profile, "llama3-8b")
+        self.assertEqual(args.context, 8192)
+        self.assertEqual(workflow.MODEL_PROFILES[args.model_profile][1], "meta-llama/Meta-Llama-3-8B")
 
     def test_base_model_is_not_given_llama2_chat_tokens(self):
         tokenizer = SimpleNamespace(chat_template=None, bos_token="<|begin_of_text|>")

@@ -27,11 +27,6 @@ def render_chat(tokenizer, messages, model_type, prompt_style="chat"):
                 f"### Task\n{messages[1]['content']}\n\n### Response\n")
     if tokenizer.chat_template:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    # Some Llama 2 tokenizer releases predate explicit Transformers chat templates.
-    # This backend only needs a system instruction followed by a single user turn.
-    if model_type == "llama" and tokenizer.bos_token == "<s>" and [m["role"] for m in messages] == ["system", "user"]:
-        return (f"{tokenizer.bos_token}[INST] <<SYS>>\n{messages[0]['content'].strip()}\n<</SYS>>\n\n"
-                f"{messages[1]['content'].strip()} [/INST]")
     raise ValueError("No supported chat template for this model/messages.")
 
 
@@ -46,15 +41,15 @@ class LocalLLM:
     def __init__(self):
         import torch
         from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
-        self.path = Path(os.environ.get("TRACER_LOCAL_MODEL", ROOT / "models/qwen"))
+        self.path = Path(os.environ.get("TRACER_LOCAL_MODEL", ROOT / "models/llama3-8b"))
         if not (self.path / "config.json").exists():
             raise FileNotFoundError(f"Local LLM missing at {self.path}. Run local_workflow.py download with the same --model-profile.")
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable. Use the project .venv with CUDA-enabled PyTorch.")
         self.max_new_tokens = int(os.environ.get("TRACER_MAX_NEW_TOKENS", "1536"))
-        self.context = int(os.environ.get("TRACER_CONTEXT", "16384"))
+        self.context = int(os.environ.get("TRACER_CONTEXT", "8192"))
         self.tokenizer = AutoTokenizer.from_pretrained(self.path, local_files_only=True)
-        self.prompt_style = os.environ.get("TRACER_PROMPT_STYLE", "chat")
+        self.prompt_style = os.environ.get("TRACER_PROMPT_STYLE", "base-v1")
         config = AutoConfig.from_pretrained(self.path, local_files_only=True)
         self.context = effective_context(self.context, config.max_position_embeddings)
         placement = os.environ.get("TRACER_DEVICE_MAP", "cuda")

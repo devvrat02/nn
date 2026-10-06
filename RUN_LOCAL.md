@@ -1,7 +1,8 @@
 # Run TRACER locally, one step at a time
 
-For **Llama 2 7B Chat** instead of Qwen, use [RUN_LLAMA2.md](RUN_LLAMA2.md).
-Its context/output settings differ; do not reuse Qwen token limits or output folders.
+For the current **Meta Llama 3 8B on REPACSS** setup, use [RUN_LLAMA3.md](RUN_LLAMA3.md).
+This guide preserves the earlier Qwen experiment. Its commands now explicitly
+select Qwen because the default model has changed.
 
 This is the manual for a **fully local Qwen adaptation** of the paper. No OpenAI
 API key, hosted inference, or paid API calls are used. Internet is needed once to
@@ -49,7 +50,7 @@ replace it with the old `torch==2.4.1` from the historical requirements file.
 ## 1. Check the environment and run software tests
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py doctor
+..\.venv\Scripts\python.exe local_workflow.py doctor --model-profile qwen
 ..\.venv\Scripts\python.exe -m unittest tests.test_regressions tests.test_local_workflow tests.test_generation_recovery tests.test_cot -v
 ..\.venv\Scripts\python.exe run_pipeline.py --mode smoke
 ```
@@ -63,7 +64,7 @@ The doctor writes package/GPU information to `outputs/local_environment.json`.
 ## 2. Download the four real models
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py download
+..\.venv\Scripts\python.exe local_workflow.py download --model-profile qwen
 ```
 
 This downloads several GB into:
@@ -83,7 +84,7 @@ workflow. The machine had more than 180 GB free at setup.
 Verify the actual language model loads and generates:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py llm-check
+..\.venv\Scripts\python.exe local_workflow.py llm-check --model-profile qwen
 ```
 
 Expected response: `LOCAL_MODEL_OK`. It may also print model-loading notices.
@@ -92,7 +93,7 @@ If model files are missing, rerun download. There is no automatic hosted fallbac
 Exercise real MiniLM/NLI ranking and final Qwen reassessment with a synthetic example:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py components-check
+..\.venv\Scripts\python.exe local_workflow.py components-check --model-profile qwen
 ```
 
 This supplies an assumption explicitly to test the downstream components, since
@@ -121,7 +122,7 @@ The subset alternates reference classes to exercise more branches. It is a debug
 sample, not a representative sample for reporting accuracy.
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py subset --data dataset/dev.json --limit 5 --output outputs/local-check/input.json
+..\.venv\Scripts\python.exe local_workflow.py subset --model-profile qwen --data dataset/dev.json --limit 5 --output outputs/local-check/input.json
 ```
 
 Train the actual RoBERTa-large architecture for just two optimizer steps on training
@@ -129,19 +130,19 @@ data. This verifies memory and checkpointing; it does not produce a useful resea
 model:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py train --data dataset/train.json --steps 2 --output outputs/alignment-check
+..\.venv\Scripts\python.exe local_workflow.py train --model-profile qwen --data dataset/train.json --steps 2 --output outputs/alignment-check
 ```
 
 Predict evidence alignment for the five development claims:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py align --data outputs/local-check/input.json --checkpoint outputs/alignment-check --output outputs/local-check/alignment.json
+..\.venv\Scripts\python.exe local_workflow.py align --model-profile qwen --data outputs/local-check/input.json --checkpoint outputs/alignment-check --output outputs/local-check/alignment.json
 ```
 
 Run real local verification:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py verify --data outputs/local-check/input.json --output outputs/local-check/literal
+..\.venv\Scripts\python.exe local_workflow.py verify --model-profile qwen --data outputs/local-check/input.json --output outputs/local-check/literal
 ```
 
 Run real local intent generation, questions, assumptions, causal filtering,
@@ -149,7 +150,7 @@ evidence ranking, and reassessment. These are internal parts of this one stage;
 the intermediate results are saved for inspection:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py reassess --data outputs/local-check/alignment.json --literal outputs/local-check/literal/log.jsonl --output outputs/local-check/reassessment
+..\.venv\Scripts\python.exe local_workflow.py reassess --model-profile qwen --data outputs/local-check/alignment.json --literal outputs/local-check/literal/log.jsonl --output outputs/local-check/reassessment
 ```
 
 Only claims initially predicted `true` enter intent/causal reassessment. If the
@@ -160,7 +161,7 @@ intent/argument outputs.
 Create a pipeline-check report:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py compare --data outputs/local-check/input.json --literal outputs/local-check/literal/log.jsonl --reassessed outputs/local-check/reassessment/log.jsonl --output outputs/local-check/comparison
+..\.venv\Scripts\python.exe local_workflow.py compare --model-profile qwen --data outputs/local-check/input.json --literal outputs/local-check/literal/log.jsonl --reassessed outputs/local-check/reassessment/log.jsonl --output outputs/local-check/comparison
 ```
 
 Read `outputs/local-check/comparison/comparison.md`. It is prominently marked as a
@@ -172,7 +173,7 @@ supports comparison claims against the paper's benchmark.
 Once the execution check passes:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py train --data dataset/train.json --epochs 5 --output outputs/alignment-full
+..\.venv\Scripts\python.exe local_workflow.py train --model-profile qwen --data dataset/train.json --epochs 5 --output outputs/alignment-full
 ```
 
 Settings: RoBERTa-large; learning rate 1e-5; 512 tokens; up to eight consecutive
@@ -195,7 +196,7 @@ Then rerun the same training command with `--resume-checkpoint` and the actual
 checkpoint directory printed above. Example syntax (replace the placeholder):
 
 ```text
-..\.venv\Scripts\python.exe local_workflow.py train --data dataset/train.json --epochs 5 --output outputs/alignment-full --resume-checkpoint outputs/alignment-full/checkpoint-NUMBER
+..\.venv\Scripts\python.exe local_workflow.py train --model-profile qwen --data dataset/train.json --epochs 5 --output outputs/alignment-full --resume-checkpoint outputs/alignment-full/checkpoint-NUMBER
 ```
 
 If there is no checkpoint yet, rerun training to restart. A completed model is
@@ -214,14 +215,14 @@ Do not train on development or test claims.
 Check that the literal prompts fit the configured local context before a long run:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py context-check --data dataset/test.json
+..\.venv\Scripts\python.exe local_workflow.py context-check --model-profile qwen --data dataset/test.json
 ```
 
 The supplied test split passed this check at setup: longest literal prompt 4,430
 tokens, plus a 1,536-token output allowance, within the 16,384-token limit.
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py align --data dataset/test.json --checkpoint outputs/alignment-full --output outputs/local-test/alignment.json
+..\.venv\Scripts\python.exe local_workflow.py align --model-profile qwen --data dataset/test.json --checkpoint outputs/alignment-full --output outputs/local-test/alignment.json
 ```
 
 This prints alignment evaluation and saves predicted labels under `prediction`.
@@ -231,7 +232,7 @@ Gold `annotation` is retained for analysis but does not feed local intent genera
 ## 8. Get the local HiSS baseline
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py verify --data dataset/test.json --output outputs/local-test/literal
+..\.venv\Scripts\python.exe local_workflow.py verify --model-profile qwen --data dataset/test.json --output outputs/local-test/literal
 ```
 
 Output: `outputs/local-test/literal/log.jsonl`. Each record contains an ID, predicted
@@ -242,7 +243,7 @@ Qwen in this command; no GPT requests are sent.
 ## 9. Apply local TRACER reassessment
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py reassess --data outputs/local-test/alignment.json --literal outputs/local-test/literal/log.jsonl --output outputs/local-test/reassessment
+..\.venv\Scripts\python.exe local_workflow.py reassess --model-profile qwen --data outputs/local-test/alignment.json --literal outputs/local-test/literal/log.jsonl --output outputs/local-test/reassessment
 ```
 
 Outputs:
@@ -260,7 +261,7 @@ error instead of silently inventing a prediction.
 ## 10. Generate the final comparison with the paper
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py compare --data dataset/test.json --literal outputs/local-test/literal/log.jsonl --reassessed outputs/local-test/reassessment/log.jsonl --output outputs/local-test/comparison
+..\.venv\Scripts\python.exe local_workflow.py compare --model-profile qwen --data dataset/test.json --literal outputs/local-test/literal/log.jsonl --reassessed outputs/local-test/reassessment/log.jsonl --output outputs/local-test/comparison
 ```
 
 Open `outputs/local-test/comparison/comparison.md`. The report contains:
@@ -301,13 +302,13 @@ Reuse the existing full alignment predictions; no retraining is needed. Run thes
 commands **one at a time** from `TRACER`, using separate CoT output directories:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py verify --verifier cot --data dataset/test.json --output outputs/local-test/cot-literal --max-new-tokens 4096
+..\.venv\Scripts\python.exe local_workflow.py verify --model-profile qwen --verifier cot --data dataset/test.json --output outputs/local-test/cot-literal --max-new-tokens 4096
 ```
 
 Then feed the **CoT** justifications and predictions into TRACER:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py reassess --data outputs/local-test/alignment.json --literal outputs/local-test/cot-literal/log.jsonl --output outputs/local-test/cot-reassessment --max-new-tokens 4096
+..\.venv\Scripts\python.exe local_workflow.py reassess --model-profile qwen --data outputs/local-test/alignment.json --literal outputs/local-test/cot-literal/log.jsonl --output outputs/local-test/cot-reassessment --max-new-tokens 4096
 ```
 
 The reassessment stage infers `cot` from the baseline manifest. It reassesses only
@@ -318,7 +319,7 @@ results cannot be resumed into CoT directories or relabeled as CoT predictions.
 After **all four local runs** finish, generate the combined report:
 
 ```powershell
-..\.venv\Scripts\python.exe local_workflow.py compare --data dataset/test.json --literal outputs/local-test/literal/log.jsonl --reassessed outputs/local-test/reassessment/log.jsonl --cot-literal outputs/local-test/cot-literal/log.jsonl --cot-reassessed outputs/local-test/cot-reassessment/log.jsonl --output outputs/local-test/comparison-all
+..\.venv\Scripts\python.exe local_workflow.py compare --model-profile qwen --data dataset/test.json --literal outputs/local-test/literal/log.jsonl --reassessed outputs/local-test/reassessment/log.jsonl --cot-literal outputs/local-test/cot-literal/log.jsonl --cot-reassessed outputs/local-test/cot-reassessment/log.jsonl --output outputs/local-test/comparison-all
 ```
 
 Read `outputs/local-test/comparison-all/comparison.md`. It contains the four paper

@@ -1,3 +1,7 @@
+> Historical validation of the earlier Windows/Qwen setup. The current REPACSS
+> model is `meta-llama/Meta-Llama-3-8B`; see [RUN_LLAMA3.md](RUN_LLAMA3.md).
+> These earlier real-model checks do not validate the new model.
+
 # Local setup validation — October 3, 2026
 
 Use `RUN_LOCAL.md` for the ordered manual commands. This file records what was
