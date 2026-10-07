@@ -123,6 +123,22 @@ def extract_answer(text):
         raise ValueError(f"Unsupported final verdict {answer!r}; expected true, half-true, or false")
     return answer
 
+def extract_hiss_answer(text, audit=None):
+    try:
+        return extract_answer(text)
+    except ValueError:
+        match = re.fullmatch(
+            r"\s*(true|half-true|false)\s*(?:\n\s*### Evidence\s*\n\s*(https?://[^\s<>]+(?:\s+https?://[^\s<>]+)*))?\s*",
+            text, re.I)
+        if not match:
+            raise
+        if audit is not None:
+            audit.setdefault("generation_recovery", "explicit-hiss-verdict-v1")
+            audit.setdefault("generation_recoveries", []).append(
+                {"stage": "HiSS verdict parsing", "policy": "explicit-hiss-verdict-v1"})
+        return match.group(1).lower()
+
+
 def promptf(question, prompt, evidence, model="gpt-3.5-turbo", audit=None,
             intermediate="\nAnswer:",
             followup="Intermediate Question",
@@ -143,7 +159,7 @@ def promptf(question, prompt, evidence, model="gpt-3.5-turbo", audit=None,
         try:
             ret_text = call_gpt(cur_prompt, model=model)
             rationale = ret_text
-            pred = extract_answer(ret_text)
+            pred = extract_hiss_answer(ret_text, audit)
             break
         except LocalGenerationLimitError:
             if recovered:
@@ -158,6 +174,18 @@ def promptf(question, prompt, evidence, model="gpt-3.5-turbo", audit=None,
                            "Use only the supplied evidence. Do not repeat questions or lists. "
                            "Do not invent quotations. Finish now with one final verdict: <true>, <half-true>, or <false>.")
         except Exception as e:
+            if isinstance(e, ValueError) and os.environ.get("TRACER_BACKEND") == "local":
+                if recovered:
+                    raise RuntimeError(f"HiSS format recovery failed: {e}") from e
+                recovered = True
+                if audit is not None:
+                    audit["generation_recovery"] = "bounded-hiss-format-v1"
+                print("Invalid HiSS answer format; retrying once with an explicit verdict requirement.", flush=True)
+                cur_prompt += ("\n\nOUTPUT REQUIREMENT: Give at most 200 words of evidence-based explanation. "
+                               "End with exactly one verdict: <true>, <half-true>, or <false>. "
+                               "Do not provide only a URL or repeat the prompt.")
+                attempts += 1
+                continue
             last_error = e
             print(f"Attempt {attempts + 1} failed: {type(e).__name__}: {e}")
             rationale = ""

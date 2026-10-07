@@ -8,6 +8,22 @@ from method.hidden_info_mining import IntentArgumentation
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_single_literal_print_choice_is_parsed_and_audited(self):
+        text = '```python\n# This is a sample solution.\nprint("A")\n```'
+        audit = []
+        self.assertEqual(parse_choice(text, "ABC", audit, "counterfactual"), "A")
+        self.assertEqual(audit[0]["policy"], "literal-print-choice-v1")
+        self.assertEqual(audit[0]["stage"], "counterfactual")
+
+    def test_choice_parser_rejects_ambiguity_and_executable_expressions(self):
+        for text in ('', 'AB', 'ABC', 'A or B',
+                     '```python\nprint("A")\nprint("B")\n```',
+                     '```python\nprint(open("secret").read())\n```',
+                     '```python\nimport os\nprint("A")\n```',
+                     '```python\nprint("D")\n```'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_choice(text, "ABC")
+
     def test_limit_recovery_changes_prompt_and_is_audited(self):
         generate = Mock(side_effect=[LocalGenerationLimitError("limit"), "<first||second>"])
         assessor = IntentArgumentation.__new__(IntentArgumentation)

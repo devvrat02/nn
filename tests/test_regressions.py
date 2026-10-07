@@ -14,6 +14,21 @@ from utils import utils
 
 
 class RegressionTests(unittest.TestCase):
+    def test_hiss_plain_verdict_and_evidence_url_are_audited(self):
+        audit = {}
+        response = "False\n\n### Evidence\nhttps://www.politifact.com/factchecks/example/"
+        self.assertEqual(verification.extract_hiss_answer(response, audit), "false")
+        self.assertEqual(audit["generation_recovery"], "explicit-hiss-verdict-v1")
+        for bad in ("False or true", "False\n### Evidence\nActually true", "False\n<unknown>"):
+            with self.assertRaises(ValueError):
+                verification.extract_hiss_answer(bad)
+
+    def test_local_hiss_format_retry_changes_prompt(self):
+        with patch.dict("os.environ", {"TRACER_BACKEND": "local"}), \
+             patch.object(verification, "call_gpt", side_effect=["no answer", "<false>"]) as call:
+            self.assertEqual(verification.promptf("claim", verification.prompt, [], audit={})[1], "false")
+        self.assertNotEqual(call.call_args_list[0].args[0], call.call_args_list[1].args[0])
+
     def test_output_limit_uses_marked_bounded_recovery(self):
         from utils.local_llm import LocalGenerationLimitError
         audit = {}

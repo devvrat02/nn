@@ -11,6 +11,24 @@ from utils import utils
 
 
 class LocalWorkflowTests(unittest.TestCase):
+    def test_repetition_controls_cannot_mix_with_existing_predictions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "input.json"
+            source.write_text("[]")
+            args = SimpleNamespace(output=base / "run", llm=base / "model", command="verify",
+                                   context=8192, max_new_tokens=1536,
+                                   repetition_penalty=1.0, no_repeat_ngram_size=0)
+            workflow.stage_manifest(args, [source])
+            args.repetition_penalty = 1.1
+            args.no_repeat_ngram_size = 8
+            with self.assertRaises(ValueError):
+                workflow.stage_manifest(args, [source])
+            args.output = base / "new-run"
+            _, config = workflow.stage_manifest(args, [source])
+            self.assertEqual(config["repetition_controls"],
+                             {"repetition_penalty": 1.1, "no_repeat_ngram_size": 8})
+
     def test_larger_output_budget_preserves_log_and_records_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

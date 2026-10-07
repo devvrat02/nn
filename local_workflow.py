@@ -48,8 +48,17 @@ def configure(args):
     os.environ["TRACER_CONTEXT"] = str(args.context)
     os.environ["TRACER_MAX_NEW_TOKENS"] = str(args.max_new_tokens)
     os.environ["TRACER_DEVICE_MAP"] = args.device_map
+    os.environ["TRACER_REPETITION_PENALTY"] = str(getattr(args, "repetition_penalty", 1.0))
+    os.environ["TRACER_NO_REPEAT_NGRAM_SIZE"] = str(getattr(args, "no_repeat_ngram_size", 0))
     os.environ["TRACER_PROMPT_STYLE"] = "base-v1" if args.model_profile == "llama3-8b" else "chat"
-    os.environ["HF_HOME"] = str(ROOT / ".cache/huggingface")
+    # Keep model caches in the workspace without hiding a pre-existing CLI login.
+    # Reference the token file; never copy or print its contents.
+    cache_home = Path(os.environ["XDG_CACHE_HOME"]) if os.environ.get("XDG_CACHE_HOME") else Path.home() / ".cache"
+    hub_home = Path(os.environ.get("HF_HOME", cache_home / "huggingface"))
+    project_home = ROOT / ".cache/huggingface"
+    if not (project_home / "token").is_file() and (hub_home / "token").is_file():
+        os.environ.setdefault("HF_TOKEN_PATH", str(hub_home / "token"))
+    os.environ.setdefault("HF_HOME", str(project_home))
     os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
     os.environ["HF_HUB_DISABLE_XET"] = "1"
     os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "120"
@@ -179,6 +188,10 @@ def stage_manifest(args, inputs):
         from method.claim_verification_cot import PROMPT
         config.update(verifier="cot", prompt_version="cot-v1",
                       prompt_sha256=hashlib.sha256(PROMPT.encode()).hexdigest())
+    if getattr(args, "repetition_penalty", 1.0) != 1.0 or getattr(args, "no_repeat_ngram_size", 0):
+        config["repetition_controls"] = {
+            "repetition_penalty": getattr(args, "repetition_penalty", 1.0),
+            "no_repeat_ngram_size": getattr(args, "no_repeat_ngram_size", 0)}
     # JSON round-trip normalizes tuples for equality on resume.
     config = json.loads(json.dumps(config))
     path = output / "local_run.json"
@@ -363,6 +376,10 @@ def main():
     parser.add_argument("--context", type=int)
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--device-map", choices=["cuda", "auto"], help="auto permits CPU offload with a 10GiB GPU weight budget")
+    parser.add_argument("--repetition-penalty", type=float, default=1.0,
+                        help="Optional repetition penalty; use a new output directory when changing decoding")
+    parser.add_argument("--no-repeat-ngram-size", type=int, default=0,
+                        help="Optional repeated n-gram blocking; 0 disables")
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--literal", type=Path)
     parser.add_argument("--reassessed", type=Path)
@@ -374,6 +391,8 @@ def main():
     parser.add_argument("--steps", type=int, default=-1)
     parser.add_argument("--limit", type=int, default=5)
     args = parser.parse_args()
+    if not 1.0 <= args.repetition_penalty <= 2.0 or args.no_repeat_ngram_size < 0:
+        parser.error("Repetition penalty must be between 1 and 2; n-gram size must be nonnegative")
     apply_model_profile(args)
     if args.data is None:
         args.data = ROOT / "dataset" / ("train.json" if args.command == "train" else "test.json")

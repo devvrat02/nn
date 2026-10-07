@@ -225,7 +225,8 @@ class IntentArgumentation:
             query = f"Evaluate △P(Z|do({letter}=¬{letter})). More specifically, how does the probability " \
             f"of Z change when we set {letter} from {letter} to ¬{letter}?"
             prompt = PROMPT_CAUSAL_EVAL.format(argument=json.dumps(argument, indent=4), query=query)
-            ans = generate_structured(call_gpt, prompt, lambda text: parse_choice(text, "ABC"), "counterfactual",
+            ans = generate_structured(call_gpt, prompt, lambda text: parse_choice(
+                text, "ABC", event.setdefault("generation_recoveries", []), "counterfactual"), "counterfactual",
                                       "Output exactly one letter: A, B, or C. No explanation.",
                                       event.setdefault("generation_recoveries", []))
             if ans == "B" or ans == "C":

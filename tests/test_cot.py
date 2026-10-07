@@ -9,6 +9,21 @@ from method import claim_verification_cot as cot
 
 
 class CotTests(unittest.TestCase):
+    def test_explicit_opening_verdict_is_audited(self):
+        audit = []
+        self.assertEqual(cot.extract_cot_answer("The claim is true. The evidence supports it.", audit), "true")
+        self.assertEqual(audit[0]["policy"], "explicit-opening-verdict-v1")
+        for label in ("true", "half-true", "false"):
+            self.assertEqual(cot.extract_cot_answer(f"The claim is {label}."), label)
+
+    def test_ambiguous_or_invalid_plain_verdicts_are_rejected(self):
+        for text in ("Evidence mentions true facts.", "The claim is not true.",
+                     "The claim is true. The final verdict is false.",
+                     "The claim is true. It is not true after all.",
+                     "The claim is true. <unknown>", "The claim is true or false."):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                cot.extract_cot_answer(text)
+
     def test_cot_uses_only_claim_and_evidence_and_resumes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

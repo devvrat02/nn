@@ -1,5 +1,9 @@
 # TRACER for Half-Truth Detection
 
+**Run on this Windows laptop:** [RUN_LLAMA3_LOCAL.md](RUN_LLAMA3_LOCAL.md) contains
+the current Llama 3 setup, five-claim checks, full local runs, resume commands,
+and comparison instructions.
+
 **Current model: `meta-llama/Meta-Llama-3-8B` (base pretrained).** Follow
 [RUN_LLAMA3.md](RUN_LLAMA3.md) for the complete REPACSS setup, download, checks,
 Slurm jobs, all four benchmarks, and comparison. The default `llama3-8b` profile

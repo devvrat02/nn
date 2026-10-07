@@ -1,4 +1,7 @@
 import unittest
+import os
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 import local_workflow as workflow
@@ -8,6 +11,22 @@ from utils.local_llm import effective_context, render_chat, stop_token_ids
 
 
 class LlamaProfileTests(unittest.TestCase):
+    def test_existing_login_is_referenced_without_copying_token(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True):
+            root = Path(tmp)
+            cache = root / "user-cache"
+            token = cache / "huggingface/token"
+            token.parent.mkdir(parents=True)
+            token.write_text("test-placeholder")
+            os.environ["XDG_CACHE_HOME"] = str(cache)
+            args = SimpleNamespace(model_profile="llama3-8b", llm=root / "model", context=8192,
+                                   max_new_tokens=1536, device_map="auto", command="download")
+            with patch.object(workflow, "ROOT", root / "project"):
+                workflow.configure(args)
+            self.assertEqual(os.environ["HF_TOKEN_PATH"], str(token))
+            self.assertFalse((Path(os.environ["HF_HOME"]) / "token").exists())
+            self.assertNotIn("HF_TOKEN", os.environ)
+
     def test_profiles_keep_qwen_defaults_and_bound_llama_context(self):
         for profile, folder, context, tokens, device in (
             ("qwen", "qwen", 16384, 1536, "cuda"),

@@ -45,7 +45,8 @@ def post_fix(pred, rationale, relevant_evidence, argument, audit=None):
     hidden_evidence = {key: relevant_evidence[key] for key in all_hidden_evidence_key}
     prompt = PROMPT_POST_PROCESS.replace("[EVIDENCE]", json.dumps(hidden_evidence, indent=4)).\
         replace("[ARGUMENT]", json.dumps(argument, indent=4)).replace("[JUSTIFICATION]", rationale).replace("[VERACITY]", pred)
-    response = generate_structured(call_gpt, prompt, lambda text: parse_choice(text, "ABCD"), "final reassessment",
+    response = generate_structured(call_gpt, prompt, lambda text: parse_choice(
+        text, "ABCD", audit, "final reassessment"), "final reassessment",
                                    "Output exactly one letter: A, B, C, or D. No explanation.", audit)
     if response == "A":
         return "true"
