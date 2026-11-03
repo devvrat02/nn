@@ -1,23 +1,35 @@
 # Running TRACER on the Repacss server
 
-These steps use the local Hugging Face causal language model under
-`/mnt/SHARED-AREA/Llama-series`. The same model is used for literal claim
-verification and reassessment; no OpenAI API key or fine-tuning job is needed.
+These steps use a local Hugging Face causal language model. The same model is
+used for literal claim verification and reassessment; no OpenAI API key or
+fine-tuning job is needed.
 
 ## 1. Check the model directory
 
-Run commands from this directory (`nn/`). Set `LLM_MODEL_PATH` to the directory
-that contains the model's `config.json`, tokenizer files, and model weights:
+The server has several checkpoints under `/mnt/SHARED-AREA/Llama-series`. Start
+with `Llama-3.1-8B-Instruct`: it is instruction-tuned and is a more practical
+starting point than the 70B/405B checkpoints. The run scripts use this as
+their default. Set `LLM_MODEL_PATH` to the *model subdirectory* that contains
+`config.json`, tokenizer files, and model weights:
 
 ```bash
-export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series
+export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.1-8B-Instruct
 test -f "$LLM_MODEL_PATH/config.json"
 ```
 
-If that directory contains a model in a child folder, set `LLM_MODEL_PATH` to
-that child folder instead. The model must be a Transformers-compatible
-`AutoModelForCausalLM` checkpoint with a usable tokenizer. Llama Instruct
-checkpoints are recommended because the prompts expect chat-style responses.
+Other available choices can be selected by changing the final directory name,
+for example:
+
+```bash
+export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct
+```
+
+Instruct variants are recommended because the prompts expect chat-style
+responses. The selected model must be a Transformers-compatible
+`AutoModelForCausalLM` checkpoint with a usable tokenizer. Confirm the
+directory layout on the server with `ls "$LLM_MODEL_PATH"` and ensure
+`config.json` is directly inside it; if files are nested further, point the
+variable to that inner model directory.
 
 The local model is loaded with `device_map="auto"` and `torch_dtype="auto"`.
 Set `CUDA_VISIBLE_DEVICES` before running if the server requires selecting
@@ -39,8 +51,7 @@ python -m pip install -r requirements.txt
 
 The first run also needs access to the Hugging Face model cache or the internet
 to download `FacebookAI/roberta-large`, `all-MiniLM-L6-v2`, and
-`cross-encoder/nli-deberta-v3-large`. The Llama checkpoint itself is loaded
-from `LLM_MODEL_PATH`.
+`cross-encoder/nli-deberta-v3-large`. The Llama checkpoint itself is loaded from `LLM_MODEL_PATH`.
 
 ## 3. Verify local Llama inference
 
@@ -118,7 +129,8 @@ The result is written to a new timestamped directory under `method/result/`.
 
 ## Notes
 
-- The scripts default to `/mnt/SHARED-AREA/Llama-series`; override
+- The scripts default to
+  `/mnt/SHARED-AREA/Llama-series/Llama-3.1-8B-Instruct`; override
   `LLM_MODEL_PATH` if the server stores the checkpoint elsewhere.
 - The sentence-alignment model is still RoBERTa-large. Llama replaces the
   GPT/OpenAI calls in claim verification and reassessment, not this classifier.
