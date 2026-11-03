@@ -6,30 +6,32 @@ fine-tuning job is needed.
 
 ## 1. Check the model directory
 
-The server has several checkpoints under `/mnt/SHARED-AREA/Llama-series`. Start
-with `Llama-3.1-8B-Instruct`: it is instruction-tuned and is a more practical
-starting point than the 70B/405B checkpoints. The run scripts use this as
-their default. Set `LLM_MODEL_PATH` to the *model subdirectory* that contains
-`config.json`, tokenizer files, and model weights:
+The server has several checkpoints under `/mnt/SHARED-AREA/Llama-series`. For
+the current 3B setup, use `Llama-3.2-3B-Instruct`. The run scripts use this as
+their default. The model path below assumes its checkpoint files are nested in
+an `FP16` directory, matching the layout you reported for another checkpoint:
 
 ```bash
-export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.1-8B-Instruct
+export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16
+ls -lah "$LLM_MODEL_PATH"
 test -f "$LLM_MODEL_PATH/config.json"
 ```
 
-Other available choices can be selected by changing the final directory name,
-for example:
+If the 3B checkpoint has a different subdirectory layout, set
+`LLM_MODEL_PATH` to the directory that actually contains the model files.
+Other available choices can be selected by changing the model directory:
 
 ```bash
-export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct
+export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.1-8B-Instruct/FP16
 ```
 
 Instruct variants are recommended because the prompts expect chat-style
 responses. The selected model must be a Transformers-compatible
 `AutoModelForCausalLM` checkpoint with a usable tokenizer. Confirm the
 directory layout on the server with `ls "$LLM_MODEL_PATH"` and ensure
-`config.json` is directly inside it; if files are nested further, point the
-variable to that inner model directory.
+`config.json` and tokenizer files are directly inside the selected model
+directory. If they are nested further, point the variable to the directory
+that contains them.
 
 The local model is loaded with `device_map="auto"` and `torch_dtype="auto"`.
 Set `CUDA_VISIBLE_DEVICES` before running if the server requires selecting
@@ -130,7 +132,7 @@ The result is written to a new timestamped directory under `method/result/`.
 ## Notes
 
 - The scripts default to
-  `/mnt/SHARED-AREA/Llama-series/Llama-3.1-8B-Instruct`; override
+  `/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16`; override
   `LLM_MODEL_PATH` if the server stores the checkpoint elsewhere.
 - The sentence-alignment model is still RoBERTa-large. Llama replaces the
   GPT/OpenAI calls in claim verification and reassessment, not this classifier.
