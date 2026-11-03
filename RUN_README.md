@@ -17,6 +17,11 @@ ls -lah "$LLM_MODEL_PATH"
 test -f "$LLM_MODEL_PATH/config.json"
 ```
 
+If your shell already has `LLM_MODEL_PATH` set to the model's parent directory
+(`.../Llama-3.2-3B-Instruct`), either update it with the export above or leave
+it as-is: the Python loader and run scripts automatically use its `FP16`
+subdirectory when that is where `config.json` is found.
+
 If the 3B checkpoint has a different subdirectory layout, set
 `LLM_MODEL_PATH` to the directory that actually contains the model files.
 Other available choices can be selected by changing the model directory:

@@ -8,9 +8,24 @@ _local_tokenizer = None
 _local_model_path = None
 
 
+def _resolve_model_path(model_path):
+    if os.path.isfile(os.path.join(model_path, "config.json")):
+        return model_path
+
+    fp16_path = os.path.join(model_path, "FP16")
+    if os.path.isfile(os.path.join(fp16_path, "config.json")):
+        return fp16_path
+
+    raise FileNotFoundError(
+        f"No config.json found in {model_path} or its FP16 subdirectory. "
+        "Set LLM_MODEL_PATH to the directory containing the model config."
+    )
+
+
 def _load_local_model(model_path):
     global _local_model, _local_tokenizer, _local_model_path
 
+    model_path = _resolve_model_path(model_path)
     if _local_model is None or _local_model_path != model_path:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -33,6 +48,7 @@ def generate_local_text(messages, model_path=None, max_new_tokens=512):
     model_path = model_path or os.environ.get("LLM_MODEL_PATH")
     if not model_path:
         raise ValueError("Set LLM_MODEL_PATH to a local Hugging Face causal language model.")
+    model_path = _resolve_model_path(model_path)
 
     model, tokenizer = _load_local_model(model_path)
     if model is None or tokenizer is None:
