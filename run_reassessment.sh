@@ -1,7 +1,17 @@
-export CUDA_VISIBLE_DEVICES="3"
+#!/usr/bin/env bash
+set -euo pipefail
 
-DATAFILE="test_alignment.json" # the output of evidence alignment
-LITERAL="method/result/20250412_123111/log.jsonl" # the output of claim verification
-INTENT_MODEL="ft:gpt-4o-mini-2024-07-18:nus-ctic:intent-reproduce:BLToK5NR" # the output model id of intent generator
+cd "$(dirname "$0")"
 
-python -m method.reassessment --datafile "$DATAFILE" --literal "$LITERAL" --intent_model "$INTENT_MODEL"
+export LLM_MODEL_PATH="${LLM_MODEL_PATH:-/mnt/SHARED-AREA/Llama-series}"
+if [[ ! -f "$LLM_MODEL_PATH/config.json" ]]; then
+    echo "No config.json found under LLM_MODEL_PATH=$LLM_MODEL_PATH" >&2
+    exit 1
+fi
+
+: "${LITERAL:?Set LITERAL to the fact-checking log.jsonl path}"
+
+python -m method.reassessment \
+    --datafile "${DATAFILE:-test_alignment.json}" \
+    --literal "$LITERAL" \
+    --intent_model "$LLM_MODEL_PATH"

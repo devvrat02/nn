@@ -115,7 +115,8 @@ def main(args):
     training_args = TrainingArguments(
         output_dir=f"./sentence_alignment/results-model/",
         num_train_epochs=args.train_epoch,
-        per_device_train_batch_size=8,
+        per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         logging_dir='./sentence_alignment/logs-model',
         logging_steps=100,
         save_strategy='epoch',
@@ -129,15 +130,14 @@ def main(args):
         train_dataset=train_dataset,
         data_collator=data_collator
     )
-    try:
-        trainer.train()
-    except RuntimeError as e:
-        print(f"RuntimeError during training: {e}")
+    trainer.train()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Training script")
     parser.add_argument("--train_dataset", type=str, default="dataset/train.json")
     parser.add_argument("--max_evi", type=int, default=8)
     parser.add_argument("--train_epoch", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     args = parser.parse_args()
     main(args)

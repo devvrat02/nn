@@ -1,23 +1,9 @@
-import os
-import json
-import openai
-from datetime import datetime
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from utils.utils import call_gpt as _call_gpt
 
 
 def call_gpt(cur_prompt, stop=None, model="gpt-4o-mini"):
-    reasoner_messages = [
-        {
-            "role": "user",
-            "content": cur_prompt
-        },
-    ]
-    completion = openai.chat.completions.create(
-        model=model,
-        messages=reasoner_messages,
-    )
-    returned = completion.choices[0].message.content
-    return returned
+    return _call_gpt(cur_prompt, stop=stop, model=model)
 
 
 PROMPT_IMPLICIT_QUESTION = """
@@ -244,18 +230,7 @@ class GPT4oMiniWrapper:
         self.model_name = model_name
     
     def call_gpt(self, cur_prompt, stop=None):
-        reasoner_messages = [
-            {
-                "role": "user",
-                "content": cur_prompt
-            },
-        ]
-        completion = openai.chat.completions.create(
-            model=self.model_name,
-            messages=reasoner_messages,
-        )
-        returned = completion.choices[0].message.content
-        return returned
+        return _call_gpt(cur_prompt, stop=stop, model=self.model_name)
 
     def __call__(self, *args, **kwds):
         return self.call_gpt(*args, **kwds)

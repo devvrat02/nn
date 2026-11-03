@@ -3,6 +3,9 @@
 This repository contains the code and resources for our EMNLP paper:
 **"The Missing Parts: Augmenting Fact Verification with Half-Truth Detection"**.
 
+For server setup and instructions to run with a local Llama checkpoint, see
+[RUN_README.md](RUN_README.md).
+
 We introduce **POLITIFACT-HIDDEN**, a benchmark of \~15k political claims annotated with **sentence-level evidence alignment**. Building on this dataset, we present **TRACER** (Truth Re-Assessment with Critical hidden Evidence Reasoning), a modular framework designed to detect **omission-based misinformation**, i.e., claims that are factually correct yet misleading due to missing critical context.
 
 ## Dataset: POLITIFACT-HIDDEN
@@ -61,88 +64,43 @@ pip install -r requirements.txt
 
 ## Evidence Alignment
 
-Train the sentence alignment model:
+Train the sentence alignment model and predict the test split:
 
 ```bash
-sh run_alignment.sh
+bash run_alignment.sh
 ```
 
-This script trains a RoBERTa-large alignment model and saves outputs under `sentence_alignment/results-model/`. Predictions are written to `test_alignment.json`.
-
-```bash
-
-#!/bin/bash
-
-# in run_alignment.sh
-
-python sentence_alignment/train_model_script.py --max_evi 8 --train_epoch 5
-
-MODEL_DIR="sentence_alignment/results-model/checkpoint-7500/"
-TEST_DATA="dataset/test.json"
-OUTPUT_FILE="test_alignment.json"
-MAX_EVIDENCE_COUNT=4
-
-
-python sentence_alignment/predict_model_script.py \
-    --model_dir "$MODEL_DIR" \
-    --test_data "$TEST_DATA" \
-    --output_file "$OUTPUT_FILE" \
-    --max_evidence_count "$MAX_EVIDENCE_COUNT"
-```
+This script trains a RoBERTa-large alignment model, selects the latest saved
+checkpoint, and writes predictions to `test_alignment.json`. See
+[RUN_README.md](RUN_README.md) for server configuration and memory options.
 
 
 ## Intent Generation
 
-We fine-tune **GPT-4o-mini** as an intent generator.
-
-1. Prepare the dataset. 
-
-```bash
-python intent_generation/intent_finetune.py
-```
-The dataset will be saved to `intent_generation/finetune_data/`.
-
-2. Fine-tune GPT-4o-mini.
-
-Follow [OpenAI fine-tuning guide](https://platform.openai.com/docs/guides/fine-tuning). Recommended hyperparameters:
-
-| Hyper-Parameter    | Value |
-| -------- | ------- |
-| Base Model  | GPT-4o-mini-2024-07-18 |
-| Epochs  | 3    |
-| Batch Size | 4     |
-
-The fine-tuned model ID will be used in later steps.
+The original implementation prepares data for GPT-4o-mini fine-tuning with
+`python intent_generation/intent_finetune.py`. For running the pipeline with
+the local Llama model, no fine-tuning is required; set `LLM_MODEL_PATH` and
+follow [RUN_README.md](RUN_README.md).
 
 
 ## Claim Verification & Re-Assessment
 
-First, verify claims literally:
+First, verify claims literally with the configured local model:
 
 ```bash
-sh run_fact_check.sh
+bash run_fact_check.sh
 ```
 
-Results are saved under `method/results/log.jsonl`.
-
-
+Results are saved under a timestamped directory in `method/result/`.
 
 Then, re-assess samples predicted as **True**:
 
 ```bash
-export CUDA_VISIBLE_DEVICES="0"
-
-DATAFILE="test_alignment.json"         # output of alignment
-LITERAL="method/results/literal.jsonl" # output of fact verification
-INTENT_MODEL="your_intent_model_id"    # fine-tuned GPT-4o-mini
-
-python -m method.reassessment \
-    --datafile "$DATAFILE" \
-    --literal "$LITERAL" \
-    --intent_model "$INTENT_MODEL"
+LITERAL=method/result/<timestamp>/log.jsonl bash run_reassessment.sh
 ```
 
-Re-assessment results are saved under `method/results/`.
+Re-assessment results are saved under a new timestamped directory in
+`method/result/`. See [RUN_README.md](RUN_README.md) for the full run order.
 
 
 ## Evaluation

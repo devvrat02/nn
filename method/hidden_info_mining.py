@@ -32,8 +32,17 @@ class IntentArgumentation:
         self.intent_model = intent_model_id
         self.question_generator = model_mapping.get(question_model, GPT4oMiniWrapper)()
         self.assumption_generator = model_mapping.get(assumption_model, GPT4oMiniWrapper)()
-        self.relevance_ranker = SentenceTransformer('all-MiniLM-L6-v2')
-        self.nli_reranker = CrossEncoder('cross-encoder/nli-deberta-v3-large')
+        auxiliary_device = os.environ.get("AUXILIARY_MODEL_DEVICE")
+        if auxiliary_device is None and os.environ.get("LLM_MODEL_PATH"):
+            auxiliary_device = "cpu"
+        self.relevance_ranker = SentenceTransformer(
+            'all-MiniLM-L6-v2',
+            device=auxiliary_device,
+        )
+        self.nli_reranker = CrossEncoder(
+            'cross-encoder/nli-deberta-v3-large',
+            device=auxiliary_device,
+        )
         self.classifier = model_mapping.get(classifier_model, GPT4oMiniWrapper)()
         print("Ranker device:", self.relevance_ranker.device)
         print("Reranker device:", self.nli_reranker.model.device)
@@ -59,6 +68,7 @@ class IntentArgumentation:
 
         max_retries = 3
         retries = 0
+        last_error = None
         while retries < max_retries:
             try:
                 response = completion_finetune(self.intent_model, messages)
@@ -66,9 +76,11 @@ class IntentArgumentation:
                 break
             except Exception as e:
                 print(e)
+                last_error = e
                 retries += 1
-                intent = ""
-        
+        else:
+            raise RuntimeError("Intent generation failed after three attempts.") from last_error
+
         return intent
 
     def _extract_content(self, input_string):
@@ -226,6 +238,7 @@ class IntentArgumentation:
     def mining_one_event(self, event):
         max_retries = 3
         retries = 0
+        last_error = None
         while retries < max_retries:
             try:
                 intent = self._generate_intent(event)
@@ -240,6 +253,10 @@ class IntentArgumentation:
                 break
             except Exception as e:
                 print(e)
+                last_error = e
                 retries += 1
                 time.sleep(1)
+        else:
+            raise RuntimeError("Hidden-information mining failed after three attempts.") from last_error
+
         return event

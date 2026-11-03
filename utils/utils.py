@@ -1,20 +1,85 @@
-import openai
 import re
 import json
-from openai import OpenAI
 import os
 from datetime import datetime
 
-client = OpenAI()
+_local_model = None
+_local_tokenizer = None
+_local_model_path = None
+
+
+def _load_local_model(model_path):
+    global _local_model, _local_tokenizer, _local_model_path
+
+    if _local_model is None or _local_model_path != model_path:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        _local_tokenizer = AutoTokenizer.from_pretrained(model_path)
+        _local_model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype="auto",
+            device_map="auto",
+        )
+        if _local_tokenizer.pad_token_id is None:
+            _local_tokenizer.pad_token = _local_tokenizer.eos_token
+        _local_model_path = model_path
+
+    return _local_model, _local_tokenizer
+
+
+def generate_local_text(messages, model_path=None, max_new_tokens=512):
+    import torch
+
+    model_path = model_path or os.environ.get("LLM_MODEL_PATH")
+    if not model_path:
+        raise ValueError("Set LLM_MODEL_PATH to a local Hugging Face causal language model.")
+
+    model, tokenizer = _load_local_model(model_path)
+    if model is None or tokenizer is None:
+        raise RuntimeError(f"Failed to load local model from {model_path}")
+
+    if tokenizer.chat_template:
+        inputs = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+    else:
+        prompt = "\n\n".join(
+            f"{message['role'].capitalize()}:\n{message['content']}" for message in messages
+        )
+        inputs = tokenizer(prompt, return_tensors="pt")
+
+    inputs = {key: value.to(model.device) for key, value in inputs.items()}
+    with torch.inference_mode():
+        generated = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+
+    prompt_length = inputs["input_ids"].shape[-1]
+    return tokenizer.decode(generated[0][prompt_length:], skip_special_tokens=True).strip()
 
 def call_gpt(cur_prompt, stop=None, model="gpt-4o-mini"):
+    local_model_path = os.environ.get("LLM_MODEL_PATH")
+    if local_model_path:
+        return generate_local_text(
+            [{"role": "user", "content": cur_prompt}],
+            model_path=local_model_path,
+        )
+
+    from openai import OpenAI
+
     reasoner_messages = [
         {
             "role": "user",
             "content": cur_prompt
         },
     ]
-    completion = openai.chat.completions.create(
+    completion = OpenAI().chat.completions.create(
         model=model,
         messages=reasoner_messages,
     )
@@ -90,8 +155,14 @@ class DataHandler:
 
 
 def completion_finetune(model, messages):
+    local_model_path = os.environ.get("LLM_MODEL_PATH")
+    if local_model_path:
+        return generate_local_text(messages, model_path=local_model_path)
+
+    from openai import OpenAI
+
     # Call the OpenAI API to generate completion
-    completion = client.chat.completions.create(
+    completion = OpenAI().chat.completions.create(
         model=model,
         messages=messages
     )

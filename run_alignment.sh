@@ -1,14 +1,24 @@
-export CUDA_VISIBLE_DEVICES=3
+#!/usr/bin/env bash
+set -euo pipefail
 
-python sentence_alignment/train_model_script.py --max_evi 8 --train_epoch 5
+cd "$(dirname "$0")"
 
-MODEL_DIR="sentence_alignment/results-model/checkpoint-7500/"
-TEST_DATA="dataset/test.json"
-OUTPUT_FILE="test_alignment.json"
-MAX_EVIDENCE_COUNT=4
+python sentence_alignment/train_model_script.py \
+    --train_dataset "${TRAIN_DATASET:-dataset/train.json}" \
+    --max_evi "${MAX_EVIDENCE_COUNT:-8}" \
+    --train_epoch "${TRAIN_EPOCHS:-5}" \
+    --batch_size "${TRAIN_BATCH_SIZE:-1}" \
+    --gradient_accumulation_steps "${GRADIENT_ACCUMULATION_STEPS:-8}"
+
+CHECKPOINT_DIR="$(find sentence_alignment/results-model -maxdepth 1 -type d -name 'checkpoint-*' -printf '%f\n' \
+    | sort -t- -k2,2n | tail -n 1)"
+if [[ -z "$CHECKPOINT_DIR" ]]; then
+    echo "No training checkpoint was created in sentence_alignment/results-model" >&2
+    exit 1
+fi
 
 python sentence_alignment/predict_model_script.py \
-    --model_dir "$MODEL_DIR" \
-    --test_data "$TEST_DATA" \
-    --output_file "$OUTPUT_FILE" \
-    --max_evidence_count "$MAX_EVIDENCE_COUNT"
+    --model_dir "sentence_alignment/results-model/$CHECKPOINT_DIR" \
+    --test_data "${TEST_DATASET:-dataset/test.json}" \
+    --output_file "${ALIGNMENT_OUTPUT:-test_alignment.json}" \
+    --max_evidence_count "${PREDICT_EVIDENCE_COUNT:-4}"

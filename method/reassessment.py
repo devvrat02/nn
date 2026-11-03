@@ -1,4 +1,5 @@
 import json
+import os
 from utils import *
 from tqdm import tqdm
 import argparse
@@ -61,7 +62,9 @@ def main(args):
     logger = DataHandler(task_description="post-process" + "\n" + args.datafile, result_folder="method/result/")
     literal_path = args.literal
 
-    intent_assessor = IntentArgumentation(intent_model_id=args.intent_model)
+    intent_assessor = IntentArgumentation(
+        intent_model_id=args.intent_model or os.environ.get("LLM_MODEL_PATH")
+    )
     hidden_info_collections = []
 
     with open(literal_path, "r") as f:
@@ -105,6 +108,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--datafile", type=str, help="The data file to be processed.")
     parser.add_argument("--literal", type=str, help="The data file to of literal checking.")
-    parser.add_argument("--intent_model", type=str, help="Intent model id of OpenAI")
+    parser.add_argument(
+        "--intent_model",
+        type=str,
+        default=os.environ.get("LLM_MODEL_PATH"),
+        help="Local model path (or OpenAI fine-tuned model ID when not using LLM_MODEL_PATH).",
+    )
     args = parser.parse_args()
     main(args)

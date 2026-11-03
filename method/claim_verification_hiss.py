@@ -126,25 +126,31 @@ def promptf(question, prompt, evidence,
     max_retries = 3
     attempts = 0
     rationale, pred = None, None
+    valid_prediction = False
 
     labels_set = ["true", "half-true", "false"]
+    last_error = None
     
     while attempts < max_retries:
         try:
             ret_text = call_gpt(cur_prompt, stop='Answer me ‘yes’ or ‘no’: No.', model="gpt-3.5-turbo")
             rationale = ret_text
             pred = extract_answer(ret_text)
-            if pred is not None:
-                assert pred.lower() in labels_set
+            if pred.lower() in labels_set:
+                pred = pred.lower()
+                valid_prediction = True
                 break
+            raise ValueError(f"Unexpected claim-verification label: {pred}")
         except Exception as e:
             print(f"Attempt {attempts + 1} failed: {e}")
-            rationale = ""
-            pred = ""
+            last_error = e
         
         attempts += 1
     
-    return rationale, pred.lower()
+    if not valid_prediction or pred is None:
+        raise RuntimeError("Claim verification failed after three attempts.") from last_error
+
+    return rationale, pred
 
 
 def extract_question(generated):
