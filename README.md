@@ -5,6 +5,8 @@ This repository contains the code and resources for our EMNLP paper:
 
 For server setup and instructions to run with a local Llama checkpoint, see
 [RUN_README.md](RUN_README.md).
+For a step-by-step local run of the 200-example ORIGINAL vs assumption-aware
+comparison, see [LOCAL_RUN_README.md](LOCAL_RUN_README.md).
 
 We introduce **POLITIFACT-HIDDEN**, a benchmark of \~15k political claims annotated with **sentence-level evidence alignment**. Building on this dataset, we present **TRACER** (Truth Re-Assessment with Critical hidden Evidence Reasoning), a modular framework designed to detect **omission-based misinformation**, i.e., claims that are factually correct yet misleading due to missing critical context.
 
@@ -73,6 +75,22 @@ bash run_alignment.sh
 This script trains a RoBERTa-large alignment model, selects the latest saved
 checkpoint, and writes predictions to `test_alignment.json`. See
 [RUN_README.md](RUN_README.md) for server configuration and memory options.
+
+To train with one evidence sentence as context and evaluate the first 200 test
+claims, use a separate output directory so existing checkpoints are preserved:
+
+```bash
+MAX_EVIDENCE_COUNT=1 PREDICT_EVIDENCE_COUNT=1 \
+PREDICT_START_INDEX=0 PREDICT_END_INDEX=200 \
+ALIGNMENT_MODEL_DIR=sentence_alignment/results-evidence-1-fixed \
+ALIGNMENT_OUTPUT=test_alignment_evidence_1.json \
+bash run_alignment.sh
+```
+
+The script trains on the full training split and evaluates only the selected
+test range. Predictions and a `_metrics.json` report are saved separately.
+For a like-for-like comparison, use `PREDICT_EVIDENCE_COUNT=1` to match the
+inference grouping used when evaluating the existing checkpoint.
 
 
 ## Intent Generation

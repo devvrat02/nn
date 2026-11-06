@@ -1,148 +1,140 @@
-# Running TRACER on the Repacss server
+# Quick benchmark
 
-These steps use a local Hugging Face causal language model. The same model is
-used for literal claim verification and reassessment; no OpenAI API key or
-fine-tuning job is needed.
-
-## 1. Check the model directory
-
-The server has several checkpoints under `/mnt/SHARED-AREA/Llama-series`. For
-the current 3B setup, use `Llama-3.2-3B-Instruct`. The run scripts use this as
-their default. The model path below assumes its checkpoint files are nested in
-an `FP16` directory, matching the layout you reported for another checkpoint:
+From `nn/`, initialize the project environment:
 
 ```bash
-export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16
-ls -lah "$LLM_MODEL_PATH"
-test -f "$LLM_MODEL_PATH/config.json"
-```
-
-If your shell already has `LLM_MODEL_PATH` set to the model's parent directory
-(`.../Llama-3.2-3B-Instruct`), either update it with the export above or leave
-it as-is: the Python loader and run scripts automatically use its `FP16`
-subdirectory when that is where `config.json` is found.
-
-If the 3B checkpoint has a different subdirectory layout, set
-`LLM_MODEL_PATH` to the directory that actually contains the model files.
-Other available choices can be selected by changing the model directory:
-
-```bash
-export LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.1-8B-Instruct/FP16
-```
-
-Instruct variants are recommended because the prompts expect chat-style
-responses. The selected model must be a Transformers-compatible
-`AutoModelForCausalLM` checkpoint with a usable tokenizer. Confirm the
-directory layout on the server with `ls "$LLM_MODEL_PATH"` and ensure
-`config.json` and tokenizer files are directly inside the selected model
-directory. If they are nested further, point the variable to the directory
-that contains them.
-
-The local model is loaded with `device_map="auto"` and `torch_dtype="auto"`.
-Set `CUDA_VISIBLE_DEVICES` before running if the server requires selecting
-specific GPUs. Local LLM mode puts the sentence-embedding and NLI reranker
-models on CPU by default to avoid competing with Llama for GPU memory. To use
-GPU for those models when there is enough memory, set
-`AUXILIARY_MODEL_DEVICE=cuda`.
-
-## 2. Create the Python environment
-
-Use Python 3.9 or newer, then install the pinned dependencies:
-
-```bash
-python -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
 ```
 
-The first run also needs access to the Hugging Face model cache or the internet
-to download `FacebookAI/roberta-large`, `all-MiniLM-L6-v2`, and
-`cross-encoder/nli-deberta-v3-large`. The Llama checkpoint itself is loaded from `LLM_MODEL_PATH`.
-
-## 3. Verify local Llama inference
-
-From `nn/`, run this before starting the full jobs:
+Then compare HiSS, CoT, and TRACER (HiSS followed by reassessment) on the first
+200 test facts:
 
 ```bash
-python -c 'from utils.utils import call_gpt; print(call_gpt("Reply with READY only."))'
+bash run_fact_check_benchmark.sh
 ```
 
-Confirm that the model responds and that the command exits successfully. If
-loading fails, verify that `LLM_MODEL_PATH` points to the actual model
-checkpoint, that the server account can read it, and that enough GPU/CPU memory
-is available.
+The benchmark reports accuracy and F1 for all three methods, plus the number
+of distinct CHE evidence items found by TRACER. Results are saved under
+`method/result/<timestamp>_benchmark/`. It runs one GPU process at a time.
 
-## 4. Train alignment and generate aligned evidence
+## Compare final classifier prompts
+
+To compare the original final-classification prompt against the structured
+component-wise prompt on the same first 200 examples and saved HiSS/alignment
+outputs, run:
 
 ```bash
-bash run_alignment.sh
+LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16 \
+AUXILIARY_MODEL_DEVICE=cuda \
+.venv/bin/python -m method.compare_tracer_filtering \
+  --comparison-mode classifier \
+  --dataset dataset/test.json \
+  --alignment-file test_alignment_evidence_1_200_fixed.json \
+  --hiss-log method/result/20261104_213400_650571_benchmark/hiss/log.jsonl \
+  --model /mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16 \
+  --start-index 0 --end-index 200
 ```
 
-This trains the RoBERTa-large alignment model on `dataset/train.json`, selects
-the latest saved training checkpoint, and writes `test_alignment.json` using
-`dataset/test.json`. Defaults use per-GPU batch size 1 with gradient
-accumulation 8 to reduce VRAM use. They can be adjusted, for example:
+Each run saves separate metrics, confusion matrices, predictions, and raw final
+classifier responses under a new timestamped directory. The `--classifier-prompt`
+option on `method.reassessment` can select `original` (the default) or
+`structured` for an individual run. Use the same instruction-tuned checkpoint
+for both configurations.
+
+To compare the opt-in Evidence Consistency Check against original TRACER on all
+200 examples, use:
 
 ```bash
-TRAIN_BATCH_SIZE=2 GRADIENT_ACCUMULATION_STEPS=4 TRAIN_EPOCHS=5 \
-  bash run_alignment.sh
+LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16 \
+AUXILIARY_MODEL_DEVICE=cuda \
+.venv/bin/python -m method.compare_tracer_filtering \
+  --comparison-mode evidence-consistency \
+  --dataset dataset/test.json \
+  --alignment-file test_alignment_evidence_1_200_fixed.json \
+  --hiss-log method/result/20261104_213400_650571_benchmark/hiss/log.jsonl \
+  --model /mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16 \
+  --start-index 0 --end-index 200
 ```
 
-The script honors `TRAIN_DATASET`, `TEST_DATASET`, `ALIGNMENT_OUTPUT`,
-`MAX_EVIDENCE_COUNT`, and `PREDICT_EVIDENCE_COUNT` if set. It uses all visible
-GPUs unless `CUDA_VISIBLE_DEVICES` is set.
+This mode checks every claim against the supplied evidence; it does not use
+ground-truth labels as model input. The original mode remains unchanged and is
+the default for `method.reassessment`.
 
-## 5. Run literal claim verification
+To select another range, use zero-based indexes; the end is exclusive:
 
 ```bash
-bash run_fact_check.sh
+FACT_CHECK_START=200 FACT_CHECK_END=400 bash run_fact_check_benchmark.sh
 ```
 
-This reads `dataset/test.json` by default and creates a timestamped
-`method/result/<timestamp>/log.jsonl`. To use another input file:
+## Decision Consistency Guard (development before locked evaluation)
+
+The optional Decision Consistency Guard is disabled by default. It runs after
+the original TRACER + HiSS prediction, analyzes the claim components against the
+same supplied evidence, and validates the prediction. It only makes a
+reconsideration call when its consistency rules identify a conflict; malformed
+or ambiguous responses escalate and preserve the pre-guard prediction.
+In guard logs, `original_prediction` is the output of the unchanged original
+TRACER + HiSS path immediately before guard evaluation (including its existing
+True-only TRACER reassessment when applicable); the raw HiSS label remains in
+`old_pred`.
+`--classifier-prompt evidence-consistency` and
+`--decision-consistency-guard` are mutually exclusive.
+
+The repository includes a 1,000-example `dataset/dev.json`, but the comparison
+runner also requires matching alignment and HiSS prediction files. Prepare
+those files for the development subset using the existing alignment checkpoint
+and HiSS pipeline. For example, with the established group-size-1 alignment
+checkpoint:
 
 ```bash
-DATASET=dataset/dev.json bash run_fact_check.sh
+.venv/bin/python sentence_alignment/predict_model_script.py \
+  --model_dir sentence_alignment/results-evidence-1-fixed/checkpoint-3745 \
+  --test_data dataset/dev.json \
+  --output_file method/result/dev_alignment_0_100.json \
+  --max_evidence_count 1 \
+  --start_index 0 --end_index 100 \
+  --do_eval
+
+FACT_CHECK_START=0 FACT_CHECK_LIMIT=100 \
+FACT_CHECK_RESULT_DIR=method/result/dev_hiss \
+LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16 \
+.venv/bin/python -m method.claim_verification_hiss \
+  --datapath dataset/dev.json --method hiss
 ```
 
-Record the `log.jsonl` path printed/created for the next step. To locate recent
-logs:
+Use the resulting HiSS log path under `method/result/dev_hiss/` in the
+comparison command below. Refine and freeze the guard prompt/configuration only
+with development data. Do not select or tune it using the locked test outputs.
+
+After freezing the development-set configuration, run the three independent
+arms on the locked 200-example set once:
 
 ```bash
-find method/result -mindepth 2 -maxdepth 2 -name log.jsonl -printf '%T@ %p\n' \
-  | sort -nr | head
+LLM_MODEL_PATH=/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16 \
+AUXILIARY_MODEL_DEVICE=cuda \
+.venv/bin/python -m method.compare_tracer_filtering \
+  --comparison-mode decision-guard \
+  --dataset dataset/test.json \
+  --alignment-file test_alignment_evidence_1_200_fixed.json \
+  --hiss-log method/result/20261104_213400_650571_benchmark/hiss/log.jsonl \
+  --model /mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16 \
+  --start-index 0 --end-index 200
 ```
 
-## 6. Run TRACER reassessment
+The runner writes a new timestamped
+`method/result/*_decision_consistency_guard_comparison/` directory, containing
+separate ORIGINAL, EXTENSION, and GUARD result JSON/logs, an
+`experiment_comparison.json` with per-class metrics and confusion matrices,
+`three_configuration_predictions.csv`, and
+`decision_consistency_guard_results.csv` with each guard analysis, action,
+evidence status, prompt/configuration ID, and prediction change. Guard action
+counts, changed-prediction counts, regressions, and corrected errors are
+reported separately. Never point `--output-dir` to an existing results folder.
 
-Use the alignment output and the literal-verification log from the previous
-step:
-
-```bash
-LITERAL=method/result/<timestamp>/log.jsonl \
-  bash run_reassessment.sh
-```
-
-The default alignment input is `test_alignment.json`. To change it:
-
-```bash
-DATAFILE=path/to/alignment.json \
-LITERAL=method/result/<timestamp>/log.jsonl \
-  bash run_reassessment.sh
-```
-
-The result is written to a new timestamped directory under `method/result/`.
-
-## Notes
-
-- The scripts default to
-  `/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16`; override
-  `LLM_MODEL_PATH` if the server stores the checkpoint elsewhere.
-- The sentence-alignment model is still RoBERTa-large. Llama replaces the
-  GPT/OpenAI calls in claim verification and reassessment, not this classifier.
-- The sentence-embedding and NLI checkpoints are separate from Llama and must
-  be available locally or downloadable.
-- For a low-memory server, reduce `TRAIN_BATCH_SIZE` and/or use a smaller
-  compatible Llama Instruct checkpoint. Training/inference throughput depends
-  on the server hardware.
+The default model path is the local Llama 3.1 8B base checkpoint. It has no
+chat template and is not instruction-tuned; a smoke test echoed its input rather
+than returning a verdict. The runner warns about this and rejects exact prompt
+echoes, so do not treat it as benchmark-ready unless it produces valid labels.
+Set `LLM_MODEL_PATH` to an Instruct/chat-tuned checkpoint for reliable scoring.
+If CUDA is unavailable, check `nvidia-smi` and
+`python -c 'import torch; print(torch.cuda.is_available())'`.

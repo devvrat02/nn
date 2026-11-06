@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-export LLM_MODEL_PATH="${LLM_MODEL_PATH:-/mnt/SHARED-AREA/Llama-series/Llama-3.2-3B-Instruct/FP16}"
+export LLM_MODEL_PATH="${LLM_MODEL_PATH:-/mnt/SHARED-AREA/Llama-series/Llama-3.1-8B}"
 if [[ ! -f "$LLM_MODEL_PATH/config.json" && -f "$LLM_MODEL_PATH/FP16/config.json" ]]; then
     LLM_MODEL_PATH="$LLM_MODEL_PATH/FP16"
     export LLM_MODEL_PATH

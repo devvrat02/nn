@@ -22,7 +22,8 @@ class IntentArgumentation:
                  intent_model_id,
                  question_model="gpt-4o-mini", 
                  assumption_model="gpt-4o-mini",
-                 classifier_model="gpt-4o-mini"):
+                 classifier_model="gpt-4o-mini",
+                 evidence_filter="original"):
         
         model_mapping = {
             "gpt-4o-mini": GPT4oMiniWrapper,
@@ -30,6 +31,9 @@ class IntentArgumentation:
         }
         
         self.intent_model = intent_model_id
+        if evidence_filter not in ("original", "assumption-aware"):
+            raise ValueError(f"Unknown evidence filter: {evidence_filter}")
+        self.evidence_filter = evidence_filter
         self.question_generator = model_mapping.get(question_model, GPT4oMiniWrapper)()
         self.assumption_generator = model_mapping.get(assumption_model, GPT4oMiniWrapper)()
         auxiliary_device = os.environ.get("AUXILIARY_MODEL_DEVICE")
@@ -84,18 +88,29 @@ class IntentArgumentation:
         return intent
 
     def _extract_content(self, input_string):
-        patterns = [
-            r"(?i)^intent:",
-            r"(?i)^intentded understanding:",
-            r"(?i)^intentded conclusion:"
-        ]
-        
-        for pattern in patterns:
-            input_string = re.sub(pattern, "", input_string, count=1).strip()
-
         pattern = re.compile(r"<([^>]+)>")
         matches = pattern.findall(input_string)
-        return matches[0]
+        if matches:
+            return matches[0].strip()
+
+        labeled_intent = re.search(
+            r"(?im)^(?:the intended conclusion(?: of the claim)?|intent)\s*:\s*(.+)$",
+            input_string,
+        )
+        if labeled_intent:
+            return labeled_intent.group(1).strip()
+
+        for prefix in (
+            r"(?i)^intent:",
+            r"(?i)^intentded understanding:",
+            r"(?i)^intentded conclusion:",
+        ):
+            input_string = re.sub(prefix, "", input_string.strip(), count=1)
+
+        lines = [line.strip() for line in input_string.splitlines() if line.strip()]
+        if not lines:
+            raise ValueError("Intent response was empty.")
+        return lines[-1]
     def _extract_answer(self, input_string):
         # Use regex to find all matches between angle brackets and trim extra whitespace
         matches = re.findall(r'<\s*(.*?)\s*>', input_string)
@@ -173,6 +188,8 @@ class IntentArgumentation:
             return random.choice([True, False])
 
     def hidden_info_mining(self, event):
+        if self.evidence_filter == "assumption-aware":
+            return self.assumption_aware_evidence_filtering(event)
         
         relevant_evidence_dict = event["relevant_evidence"]
         hidden_evidence_key = []
@@ -206,6 +223,150 @@ class IntentArgumentation:
             )
 
         return argument
+
+    def assumption_aware_evidence_filtering(self, event):
+        relevant_evidence = event.get("relevant_evidence") or {}
+        predictions = event.get("prediction") or []
+        assumptions = event.get("assumption") or []
+        argument = {
+            "intent": event.get("intent", ""),
+            "claim": event.get("claim", ""),
+            "assumption": [],
+        }
+        filter_log = []
+        hidden_candidates = []
+        seen_texts = set()
+
+        for key, prediction in zip(relevant_evidence, predictions):
+            evidence_text = relevant_evidence[key]
+            if prediction != 1:
+                filter_log.append({
+                    "evidence_key": key,
+                    "decision": "excluded",
+                    "reason": "alignment model marked evidence as presented",
+                })
+                continue
+            if not isinstance(evidence_text, str) or not evidence_text.strip():
+                filter_log.append({
+                    "evidence_key": key,
+                    "decision": "excluded",
+                    "reason": "evidence text is empty or malformed",
+                })
+                continue
+            normalized_text = " ".join(evidence_text.casefold().split())
+            if normalized_text in seen_texts:
+                filter_log.append({
+                    "evidence_key": key,
+                    "decision": "excluded",
+                    "reason": "duplicate evidence text",
+                })
+                print(
+                    f"[assumption-aware] {key}: excluded duplicate evidence text.",
+                    flush=True,
+                )
+                continue
+            seen_texts.add(normalized_text)
+            hidden_candidates.append((key, evidence_text))
+
+        if not isinstance(assumptions, list):
+            print(
+                "[assumption-aware] malformed assumptions; no evidence was "
+                "attached to assumptions.",
+                flush=True,
+            )
+            assumptions = []
+
+        for assumption_index, assumption in enumerate(assumptions):
+            if not isinstance(assumption, str) or not assumption.strip():
+                print(
+                    f"[assumption-aware] assumption {assumption_index + 1}: "
+                    "skipped empty or malformed assumption.",
+                    flush=True,
+                )
+                continue
+            if not hidden_candidates:
+                print(
+                    f"[assumption-aware] assumption {assumption_index + 1}: "
+                    "no hidden evidence available.",
+                    flush=True,
+                )
+                continue
+
+            keys = [key for key, _ in hidden_candidates]
+            texts = [text for _, text in hidden_candidates]
+            embeddings = self.relevance_ranker.encode([assumption, *texts])
+            similarities = cosine_similarity(
+                [embeddings[0]], embeddings[1:]
+            )[0]
+            labels, confidences = self._cross_encoder_pipeline(texts, assumption)
+            if len(labels) != len(texts) or len(confidences) != len(texts):
+                raise RuntimeError(
+                    "NLI model returned a different number of relationships than "
+                    "the evidence candidates."
+                )
+
+            supported_by = []
+            refuted_by = []
+            neutral = []
+            relationships = []
+            for key, label, similarity, confidence in zip(
+                keys, labels, similarities, confidences
+            ):
+                if label == "entailment":
+                    relationship = "supports"
+                    supported_by.append(key)
+                    retain = True
+                    reason = "NLI supports assumption"
+                elif label == "contradiction":
+                    relationship = "contradicts"
+                    refuted_by.append(key)
+                    retain = True
+                    reason = "NLI contradicts assumption; retained despite conflict"
+                elif label == "neutral":
+                    relationship = "neutral/insufficient"
+                    retain = float(similarity) >= 0.45
+                    reason = (
+                        "NLI neutral and similarity meets relevance threshold"
+                        if retain
+                        else "NLI neutral and below relevance threshold"
+                    )
+                    if retain:
+                        neutral.append(key)
+                else:
+                    raise ValueError(f"Unexpected NLI label: {label!r}")
+
+                relationships.append({
+                    "evidence_key": key,
+                    "relationship": relationship,
+                    "similarity": float(similarity),
+                    "confidence": float(confidence),
+                    "retained": retain,
+                    "reason": reason,
+                })
+
+            retained = supported_by + refuted_by + neutral
+            print(
+                f"[assumption-aware] assumption {assumption_index + 1}: "
+                f"{len(supported_by)} support, {len(refuted_by)} contradict, "
+                f"{len(neutral)} neutral retained; "
+                f"{len(hidden_candidates) - len(retained)} irrelevant removed.",
+                flush=True,
+            )
+            if retained:
+                argument["assumption"].append({
+                    "content": assumption,
+                    "supported_by": supported_by,
+                    "refuted_by": refuted_by,
+                    "neutral": neutral,
+                    "evidence_relationships": relationships,
+                })
+            filter_log.append({
+                "assumption": assumption,
+                "relationships": relationships,
+            })
+
+        event["evidence_filter_log"] = filter_log
+        return argument
     
     def counterfactual_evaluation(self, event):
         claim = event['claim']
@@ -222,7 +383,23 @@ class IntentArgumentation:
             }
         }
         for i, assume in enumerate(assumption):
-            argument["linked_by"][f"Y{i+1}"] = assume
+            if self.evidence_filter == "assumption-aware":
+                assumption_evidence = next(
+                    (
+                        item
+                        for item in (event.get("argument") or {}).get("assumption", [])
+                        if item.get("content") == assume
+                    ),
+                    {},
+                )
+                argument["linked_by"][f"Y{i+1}"] = {
+                    "assumption": assume,
+                    "evidence_relationships": assumption_evidence.get(
+                        "evidence_relationships", []
+                    ),
+                }
+            else:
+                argument["linked_by"][f"Y{i+1}"] = assume
         valid_assumption = []
         for i, assume in enumerate(assumption):
             letter = f"Y{i+1}"
@@ -247,8 +424,19 @@ class IntentArgumentation:
                 event["question"] = questions
                 assumptions = self.implicit_assumption(event)
                 event["assumption"] = assumptions
-                self.counterfactual_evaluation(event)
-                argument = self.hidden_info_mining(event)
+                if self.evidence_filter == "original":
+                    self.counterfactual_evaluation(event)
+                    argument = self.hidden_info_mining(event)
+                else:
+                    argument = self.hidden_info_mining(event)
+                    event["argument"] = argument
+                    self.counterfactual_evaluation(event)
+                    valid_assumptions = set(event["assumption"])
+                    argument["assumption"] = [
+                        item
+                        for item in argument["assumption"]
+                        if item["content"] in valid_assumptions
+                    ]
                 event["argument"] = argument
                 break
             except Exception as e:

@@ -118,7 +118,15 @@ def find_model_file(model_dir):
     
     raise FileNotFoundError(f"No model file found in {model_dir}")
 
-def predict(model_dir, test_data_path, output_path, max_evidence_count=4, do_eval=False):
+def predict(
+    model_dir,
+    test_data_path,
+    output_path,
+    max_evidence_count=4,
+    do_eval=False,
+    start_index=0,
+    end_index=None,
+):
     tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-large")
     special_token = "[SPLIT]"
     if special_token not in tokenizer.get_vocab():
@@ -135,7 +143,20 @@ def predict(model_dir, test_data_path, output_path, max_evidence_count=4, do_eva
     model.eval()
     
     with open(test_data_path, 'r') as f:
-        test_data = json.load(f)
+        all_test_data = json.load(f)
+
+    if start_index < 0:
+        raise ValueError("start_index must be zero or a positive integer.")
+    if end_index is None:
+        end_index = len(all_test_data)
+    if end_index < start_index:
+        raise ValueError("end_index must be greater than or equal to start_index.")
+    test_data = all_test_data[start_index:end_index]
+    if not test_data:
+        raise ValueError(
+            f"No test examples in range [{start_index}, {end_index}) "
+            f"from {test_data_path}."
+        )
     
     final_results = []
     eval_pred = []
@@ -164,10 +185,28 @@ def predict(model_dir, test_data_path, output_path, max_evidence_count=4, do_eva
         json.dump(final_results, f, indent=2)
     
     if do_eval:
-        reports = classification_report(eval_true, eval_pred)
+        reports = classification_report(eval_true, eval_pred, zero_division=0)
         matrix = confusion_matrix(eval_true, eval_pred)
         print(reports)
         print(matrix)
+        metrics_path = os.path.splitext(output_path)[0] + "_metrics.json"
+        with open(metrics_path, "w") as metrics_file:
+            json.dump(
+                {
+                    "test_data": test_data_path,
+                    "start_index": start_index,
+                    "end_index_exclusive": end_index,
+                    "examples": len(test_data),
+                    "max_evidence_count": max_evidence_count,
+                    "classification_report": classification_report(
+                        eval_true, eval_pred, output_dict=True, zero_division=0
+                    ),
+                    "confusion_matrix": matrix.tolist(),
+                },
+                metrics_file,
+                indent=2,
+            )
+        logging.info(f"Evaluation metrics saved to {metrics_path}")
     
     logging.info(f"Prediction completed. Results saved to {output_path}")
 
@@ -178,6 +217,8 @@ def main():
     parser.add_argument("--output_file", type=str, default="test_alignment.json")
     parser.add_argument("--max_evidence_count", type=int, default=8)
     parser.add_argument("--do_eval", action="store_true", default=False)
+    parser.add_argument("--start_index", type=int, default=0)
+    parser.add_argument("--end_index", type=int)
     args = parser.parse_args()
     
     predict(
@@ -185,7 +226,9 @@ def main():
         test_data_path=args.test_data,
         output_path=args.output_file,
         max_evidence_count=args.max_evidence_count,
-        do_eval=args.do_eval
+        do_eval=args.do_eval,
+        start_index=args.start_index,
+        end_index=args.end_index,
     )
 
 if __name__ == '__main__':

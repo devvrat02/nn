@@ -53,7 +53,7 @@ class Aligner(PreTrainedModel):
             loss_fn = nn.BCEWithLogitsLoss(reduction="none")
             loss = loss_fn(logits, labels)
             masked_loss = loss * labels_mask  # (batch_size, num_sentences)
-            loss = masked_loss.sum() / labels_mask.sum()
+            loss = masked_loss.sum() / labels_mask.sum().clamp_min(1)
             output["loss"] = loss
 
         return output

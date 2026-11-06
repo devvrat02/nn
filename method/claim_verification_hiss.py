@@ -107,50 +107,96 @@ Evidence:
 Claim: ''', '''A fact checker will''',
  ]
 
+cot_prompt = ['''You are a careful fact checker. Determine whether the claim is true,
+half-true, or false based only on the evidence below.
+
+Think through the key facts and any important context step by step. Then give
+your final verdict. Your response must end with exactly one of these labels:
+<true>, <half-true>, or <false>.
+
+Claim: {claim}
+
+Evidence:
+{evidence}
+
+Reasoning and final verdict:
+''']
 
 
 def extract_answer(text):
-    matches = re.findall(r'<\s*(.*?)\s*>', text)
-    ans = matches[-1]
-    return ans
+    labels = r"(?:half[\s-]+true|true|false)"
+    matches = re.findall(rf"<\s*({labels})\s*>", text, flags=re.IGNORECASE)
+    if matches:
+        return re.sub(r"\s+", "-", matches[-1].lower())
+
+    verdict_prefix = (
+        r"(?:we\s+(?:rate|classify)\s+(?:(?:(?:the|this)\s+)?"
+        r"(?:claim|statement)|it)\s+"
+        r"(?:as\s+)?|(?:the\s+)?(?:claim|statement|verdict|classification|rating)\s+"
+        r"(?:(?:is|was|should be|is classified as|is rated as)\s*|:\s*))"
+    )
+    match = re.search(
+        rf"(?:^|[\n.!?]\s*){verdict_prefix}({labels})[.!]?\s*$",
+        text.rstrip(),
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return re.sub(r"\s+", "-", match.group(1).lower())
+
+    final_line = text.rstrip().splitlines()[-1].strip() if text.strip() else ""
+    match = re.fullmatch(
+        rf"({labels})[.!]?",
+        final_line,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return re.sub(r"\s+", "-", match.group(1).lower())
+
+    raise ValueError(
+        "Model response did not include a valid <true>, <half-true>, or <false> "
+        f"label. Response ended with: {text[-300:]!r}"
+    )
 
 def promptf(question, prompt, evidence,
             intermediate="\nAnswer:",
             followup="Intermediate Question",
-            finalans='\nBased on the answers to these questions, it is clear that among among false, half-true, true, the claim '):
+            finalans='\nBased on the answers to these questions, it is clear that among among false, half-true, true, the claim ',
+            prompt_template=None):
     claim = question
-    cur_prompt = prompt[0] + question
-    
-    cur_prompt = cur_prompt.replace('[EVIDENCE]', '\n'.join(evidence))
-    
-    max_retries = 3
-    attempts = 0
-    rationale, pred = None, None
-    valid_prediction = False
+    template = prompt_template or prompt[0]
+    if "{claim}" in template:
+        cur_prompt = template.format(claim=question, evidence="\n".join(evidence))
+    else:
+        cur_prompt = template + question
+        cur_prompt = cur_prompt.replace('[EVIDENCE]', '\n'.join(evidence))
+    cur_prompt += (
+        "\n\nOutput-format requirement: End your response with exactly one of "
+        "<true>, <half-true>, or <false>."
+    )
 
-    labels_set = ["true", "half-true", "false"]
-    last_error = None
-    
-    while attempts < max_retries:
+    rationale = call_gpt(
+        cur_prompt, stop='Answer me ‘yes’ or ‘no’: No.', model="gpt-3.5-turbo"
+    )
+    try:
+        return rationale, extract_answer(rationale)
+    except ValueError:
+        recovery_prompt = (
+            "Classify the veracity of the claim using only the supplied evidence. "
+            "Return exactly one label and nothing else: <true>, <half-true>, "
+            "or <false>.\n\n"
+            f"Claim: {question}\n\nEvidence:\n" + "\n".join(evidence)
+        )
+        recovery = call_gpt(recovery_prompt, model="gpt-3.5-turbo")
         try:
-            ret_text = call_gpt(cur_prompt, stop='Answer me ‘yes’ or ‘no’: No.', model="gpt-3.5-turbo")
-            rationale = ret_text
-            pred = extract_answer(ret_text)
-            if pred.lower() in labels_set:
-                pred = pred.lower()
-                valid_prediction = True
-                break
-            raise ValueError(f"Unexpected claim-verification label: {pred}")
-        except Exception as e:
-            print(f"Attempt {attempts + 1} failed: {e}")
-            last_error = e
-        
-        attempts += 1
-    
-    if not valid_prediction or pred is None:
-        raise RuntimeError("Claim verification failed after three attempts.") from last_error
+            pred = extract_answer(recovery)
+        except ValueError as recovery_error:
+            raise RuntimeError(
+                "Claim verification failed: the model omitted a valid label in "
+                f"both its answer and the format-recovery response. "
+                f"Recovery response ended with: {recovery[-300:]!r}"
+            ) from recovery_error
 
-    return rationale, pred
+        return f"{rationale}\n\nFormat-recovery response: {recovery}", pred
 
 
 def extract_question(generated):
@@ -162,26 +208,50 @@ def main(args):
     with open(dataset_path, 'r') as json_file:
         json_list = json.load(json_file)
 
-    logger = DataHandler(task_description="Claim Verification HiSS", result_folder="method/result/")
+    result_dir = os.environ.get("FACT_CHECK_RESULT_DIR", "method/result/")
+    method_name = args.method
+    logger = DataHandler(
+        task_description=f"Claim Verification {method_name.upper()}", result_folder=result_dir
+    )
 
-    for json_str in tqdm(json_list):
-        result = json_str
-        label = result["veracity"]
-        claim = result["claim"]
-        idx = result["example_id"]
-        evidence = result["evidence"]
-        ruling = result["ruling"]
+    start_index = int(os.environ.get("FACT_CHECK_START", "0"))
+    end_value = os.environ.get("FACT_CHECK_END")
+    limit_value = os.environ.get("FACT_CHECK_LIMIT")
+    if start_index < 0:
+        raise ValueError("FACT_CHECK_START must be zero or a positive integer.")
+    if end_value and limit_value:
+        raise ValueError("Set only one of FACT_CHECK_END or FACT_CHECK_LIMIT.")
+    if end_value:
+        end_index = int(end_value)
+    elif limit_value:
+        limit = int(limit_value)
+        if limit < 1:
+            raise ValueError("FACT_CHECK_LIMIT must be a positive integer.")
+        end_index = start_index + limit
+    else:
+        end_index = len(json_list)
+    if end_index < start_index:
+        raise ValueError("FACT_CHECK_END must be greater than or equal to FACT_CHECK_START.")
+    json_list = json_list[start_index:end_index]
+    if not json_list:
+        raise ValueError(
+            f"No records in dataset range [{start_index}, {end_index})."
+        )
 
-        question = claim 
-        rationale, pred = promptf(question, 
-                                  prompt, 
-                                  evidence=evidence)
+    selected_prompt = prompt if method_name == "hiss" else cot_prompt
+    for record in tqdm(json_list, desc=f"{method_name.upper()} fact checks"):
+        rationale, pred = promptf(
+            record["claim"],
+            selected_prompt,
+            evidence=record["evidence"],
+            prompt_template=selected_prompt[0] if method_name == "cot" else None,
+        )
         logger.log_iteration({
-            "example_id": idx,
-            "veracity": label,
+            "example_id": record["example_id"],
+            "veracity": record["veracity"],
             "pred": pred,
-            "claim": claim,
-            "ruling": ruling,
+            "claim": record["claim"],
+            "ruling": record["ruling"],
             "rationale": rationale,
         })
     
@@ -189,7 +259,12 @@ def main(args):
 
 
 if __name__ == '__main__':
-   parser = argparse.ArgumentParser()
-   parser.add_argument("--datapath", type=str, default="dataset/test.json")
-   args = parser.parse_args()
-   main(args)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--datapath", type=str, default="dataset/test.json")
+    parser.add_argument(
+        "--method",
+        choices=("hiss", "cot"),
+        default=os.environ.get("FACT_CHECK_METHOD", "hiss"),
+    )
+    args = parser.parse_args()
+    main(args)

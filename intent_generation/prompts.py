@@ -116,6 +116,8 @@ Claim:
 {claim}
 Evidence:
 {evidence}
+
+Output only the intended conclusion, enclosed in angle brackets, like <intended conclusion>.
 """
 
 FINETUNE_TEMPLATE_OUTPUT = """The intended conclusion of the claim: <{intent}>.

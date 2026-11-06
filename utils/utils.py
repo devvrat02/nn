@@ -27,7 +27,15 @@ def _load_local_model(model_path):
 
     model_path = _resolve_model_path(model_path)
     if _local_model is None or _local_model_path != model_path:
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA is not available in this Python environment. Activate the "
+                "CUDA-enabled .venv and verify that nvidia-smi and "
+                "torch.cuda.is_available() can see the GPUs."
+            )
 
         _local_tokenizer = AutoTokenizer.from_pretrained(model_path)
         _local_model = AutoModelForCausalLM.from_pretrained(
@@ -35,6 +43,34 @@ def _load_local_model(model_path):
             torch_dtype="auto",
             device_map="auto",
         )
+        device_map = getattr(_local_model, "hf_device_map", {})
+        non_gpu_devices = {
+            str(device)
+            for device in device_map.values()
+            if not isinstance(device, int) and not str(device).startswith("cuda")
+        }
+        if non_gpu_devices:
+            del _local_model
+            _local_model = None
+            raise RuntimeError(
+                "The model was partially placed outside the GPUs "
+                f"({', '.join(sorted(non_gpu_devices))}). Reduce other GPU jobs "
+                "or select a smaller model; refusing a slow CPU-offloaded run."
+            )
+        devices = sorted(
+            {
+                f"cuda:{device}" if isinstance(device, int) else str(device)
+                for device in device_map.values()
+            }
+        )
+        print(f"LLM loaded on {', '.join(devices)}", flush=True)
+        if not _local_tokenizer.chat_template:
+            print(
+                "Warning: this checkpoint has no chat template; using a manually "
+                "formatted Llama 3 completion prompt. Responses may be less reliable "
+                "than an Instruct model.",
+                flush=True,
+            )
         if _local_tokenizer.pad_token_id is None:
             _local_tokenizer.pad_token = _local_tokenizer.eos_token
         _local_model_path = model_path
@@ -62,9 +98,15 @@ def generate_local_text(messages, model_path=None, max_new_tokens=512):
             return_tensors="pt",
         )
     else:
-        prompt = "\n\n".join(
-            f"{message['role'].capitalize()}:\n{message['content']}" for message in messages
-        )
+        prompt = "<|begin_of_text|>"
+        for message in messages:
+            role = message["role"]
+            content = message["content"]
+            prompt += (
+                f"<|start_header_id|>{role}<|end_header_id|>\n\n"
+                f"{content}<|eot_id|>"
+            )
+        prompt += "<|start_header_id|>assistant<|end_header_id|>\n\n"
         inputs = tokenizer(prompt, return_tensors="pt")
 
     inputs = {key: value.to(model.device) for key, value in inputs.items()}
@@ -73,11 +115,32 @@ def generate_local_text(messages, model_path=None, max_new_tokens=512):
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            temperature=1.0,
+            top_p=1.0,
             pad_token_id=tokenizer.pad_token_id,
         )
 
     prompt_length = inputs["input_ids"].shape[-1]
-    return tokenizer.decode(generated[0][prompt_length:], skip_special_tokens=True).strip()
+    response = tokenizer.decode(
+        generated[0][prompt_length:], skip_special_tokens=True
+    ).strip()
+    if (
+        not tokenizer.chat_template
+        and response == messages[-1]["content"].strip()
+    ):
+        raise RuntimeError(
+            f"The base model at {model_path} echoed the input instead of producing "
+            "a completion. Its outputs cannot be scored as claim predictions; use "
+            "an Instruct/chat-tuned checkpoint."
+        )
+    if not response:
+        raise RuntimeError(
+            f"The model at {model_path} generated no visible text. Check that "
+            "LLM_MODEL_PATH points to a compatible checkpoint and that its "
+            "prompt format is supported."
+        )
+    return response
+
 
 def call_gpt(cur_prompt, stop=None, model="gpt-4o-mini"):
     local_model_path = os.environ.get("LLM_MODEL_PATH")
